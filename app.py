@@ -44,7 +44,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.0 (Money Manager)")
+st.title("🏀 NBAI 3.1 (Money Manager)")
 st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리(1~10만원) 시스템")
 
 # --- 1. 데이터 로딩 함수 (배당 + 경기데이터 + 상성) ---
@@ -138,21 +138,23 @@ def load_data_with_odds():
             hs = team_stats.get(home_id)
             as_ = team_stats.get(away_id)
             
-            # 상성 계산
+            # 상성 계산 (대소문자 수정 완료)
             h2h_text = "기록 없음"; h2h_factor = 0
             if not total_log.empty:
-                h_games = total_log[total_log['Team_ID'] == home_id]['GAME_ID'].unique()
-                a_games = total_log[total_log['Team_ID'] == away_id]['GAME_ID'].unique()
-                matchups = list(set(h_games) & set(a_games))
-                if len(matchups) > 0:
-                    h_wins = 0
-                    for g_id in matchups:
-                        row = total_log[(total_log['Team_ID'] == home_id) & (total_log['GAME_ID'] == g_id)]
-                        if not row.empty and row.iloc[0]['WL'] == 'W': h_wins += 1
-                    win_rate = h_wins / len(matchups)
-                    h2h_text = f"최근 {len(matchups)}전 {h_wins}승 {len(matchups)-h_wins}패"
-                    if win_rate >= 0.7: h2h_factor = 0.15
-                    elif win_rate <= 0.3: h2h_factor = -0.15
+                # TEAM_ID, GAME_ID 대문자로 수정
+                if 'TEAM_ID' in total_log.columns:
+                    h_games = total_log[total_log['TEAM_ID'] == home_id]['GAME_ID'].unique()
+                    a_games = total_log[total_log['TEAM_ID'] == away_id]['GAME_ID'].unique()
+                    matchups = list(set(h_games) & set(a_games))
+                    if len(matchups) > 0:
+                        h_wins = 0
+                        for g_id in matchups:
+                            row = total_log[(total_log['TEAM_ID'] == home_id) & (total_log['GAME_ID'] == g_id)]
+                            if not row.empty and row.iloc[0]['WL'] == 'W': h_wins += 1
+                        win_rate = h_wins / len(matchups)
+                        h2h_text = f"최근 {len(matchups)}전 {h_wins}승 {len(matchups)-h_wins}패"
+                        if win_rate >= 0.7: h2h_factor = 0.15
+                        elif win_rate <= 0.3: h2h_factor = -0.15
 
             # 배당 매핑
             my_odds = {'h_odd': 0.0, 'a_odd': 0.0, 'ref': 0.0}
@@ -228,14 +230,11 @@ else:
             match_name = f"{m['home']} vs {m['away']}"
             note = f" | {rival_badge}" if rival_badge else ""
             
-            # [자금 관리 로직] EV 점수에 따른 금액 매핑
+            # [자금 관리 로직]
             def calc_money(ev_score):
                 if ev_score <= 0: return 0
-                # EV 0.01~0.20 구간을 MIN_BET~MAX_BET으로 매핑
-                # EV가 높을수록 금액 증가
-                ratio = min(ev_score / 0.20, 1.0) # 0.20 이상이면 MAX
+                ratio = min(ev_score / 0.20, 1.0)
                 amount = MIN_BET + (MAX_BET - MIN_BET) * ratio
-                # 천원 단위 반올림
                 return round(amount, -3)
 
             if h_ev > 0 and h_ev > a_ev:
@@ -248,7 +247,6 @@ else:
             if ref_score > 0:
                 diff = ai_total - ref_score
                 uo_odd = 1.90
-                # 언오버는 EV가 상대적으로 낮게 나오므로 가중치 보정
                 if diff >= 3.0:
                     prob = 55 + diff; prob = 80 if prob > 80 else prob
                     ev = (prob/100 * uo_odd) - 1.0
@@ -265,9 +263,8 @@ else:
             st.subheader("🏆 NBAI 최종 추천 리포트")
             for i, res in enumerate(results):
                 tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
-                if res['money'] < MIN_BET: res['money'] = MIN_BET # 최소금액 보정
+                if res['money'] < MIN_BET: res['money'] = MIN_BET
                 
-                # 금액 표시 디자인
                 money_str = f"💸 권장 배팅금: {int(res['money']):,}원"
                 
                 if "주의" in res['game']:
@@ -277,7 +274,6 @@ else:
             
             if len(results) >= 2:
                 avg_score = (results[0]['prob'] + results[1]['prob']) / 2
-                # 2폴더 총 권장 배팅금은 두 경기 평균치 사용
                 total_bet_rec = (results[0]['money'] + results[1]['money']) / 2
                 total_bet_rec = round(total_bet_rec, -3)
 
