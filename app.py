@@ -129,3 +129,109 @@ def load_data_with_odds():
             as_ = team_stats.get(away_id)
             
             # 배당 찾기
+            my_odds = {'h_odd': 0.0, 'a_odd': 0.0, 'ref': 0.0}
+            for k, v in odds_map.items():
+                if h_eng in k or k in h_eng:
+                    my_odds = v
+                    break
+
+            if hs and as_:
+                match_data.append({
+                    'home': eng_to_kor.get(h_eng, h_eng),
+                    'away': eng_to_kor.get(a_eng, a_eng),
+                    'hs': hs, 'as': as_,
+                    'odds': my_odds
+                })
+        
+        return match_data, today_us.strftime('%Y-%m-%d')
+
+    except Exception as e:
+        return None, str(e)
+
+# --- 메인 로직 ---
+with st.spinner('서버 접속 중... (도현 & 세준)'):
+    matches, date_str = load_data_with_odds()
+
+if matches is None:
+    st.error(f"데이터 로딩 실패: {date_str}")
+else:
+    st.success(f"✅ 데이터 준비 완료 ({date_str})")
+    st.markdown("---")
+    
+    input_data = []
+    for idx, match in enumerate(matches):
+        odds = match['odds']
+        with st.expander(f"🏀 {match['home']} vs {match['away']}", expanded=True):
+            col1, col2, col3 = st.columns(3)
+            h_odd = col1.number_input("홈 배당", value=float(odds['h_odd']), step=0.01, key=f"h_{idx}")
+            a_odd = col2.number_input("원정 배당", value=float(odds['a_odd']), step=0.01, key=f"a_{idx}")
+            ref = col3.number_input("기준점", value=float(odds['ref']), step=0.5, key=f"r_{idx}")
+            input_data.append({'match': match, 'h_odd': h_odd, 'a_odd': a_odd, 'ref': ref})
+
+    st.markdown("---")
+    
+    if st.button("🚀 분석 시작 (Go)", type="primary"):
+        results = []
+        for item in input_data:
+            m = item['match']; h_odd = item['h_odd']; a_odd = item['a_odd']; ref_score = item['ref']
+            if h_odd == 0 or a_odd == 0: continue
+            
+            hs = m['hs']; as_ = m['as']
+            h_score = (hs['HomePCT']*0.4) + (hs['PointDiff']*0.03*0.3) + (hs['L10_PCT']*0.3)
+            a_score = (as_['RoadPCT']*0.4) + (as_['PointDiff']*0.03*0.3) + (as_['L10_PCT']*0.3)
+            if h_score < 0.05: h_score = 0.05
+            if a_score < 0.05: a_score = 0.05
+            total = h_score + a_score
+            win_prob = h_score / total
+            
+            base_total = (hs['PointsPG'] + as_['OppPointsPG'])/2 + (as_['PointsPG'] + hs['OppPointsPG'])/2
+            pace_adj = 0
+            if base_total > 240: pace_adj = 3.0
+            elif base_total < 215: pace_adj = -3.0
+            ai_total = base_total + pace_adj
+            
+            h_ev = (win_prob * h_odd) - 1.0
+            a_ev = ((1 - win_prob) * a_odd) - 1.0
+            
+            match_name = f"{m['home']} vs {m['away']}"
+            if h_ev > 0 and h_ev > a_ev:
+                results.append({'type': '승패', 'game': match_name, 'pick': f"{m['home']} 승", 'prob': win_prob*100, 'ev': h_ev, 'odd': h_odd})
+            elif a_ev > 0 and a_ev > h_ev:
+                results.append({'type': '승패', 'game': match_name, 'pick': f"{m['away']} 승 (역배/플핸)", 'prob': (1-win_prob)*100, 'ev': a_ev, 'odd': a_odd})
+            
+            if ref_score > 0:
+                diff = ai_total - ref_score
+                uo_odd = 1.90
+                if diff >= 3.0:
+                    prob = 55 + diff; prob = 80 if prob > 80 else prob
+                    ev = (prob/100 * uo_odd) - 1.0
+                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"오버 ▲ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd})
+                elif diff <= -3.0:
+                    prob = 55 + abs(diff); prob = 80 if prob > 80 else prob
+                    ev = (prob/100 * uo_odd) - 1.0
+                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"언더 ▼ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd})
+
+        if not results:
+            st.warning("⚠️ 추천할 만한 가치 있는 경기(Value Bet)가 없습니다.")
+        else:
+            results.sort(key=lambda x: x['ev'], reverse=True)
+            st.subheader("🏆 AI 최종 추천 리포트")
+            for i, res in enumerate(results):
+                tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
+                st.info(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
+            
+            if len(results) >= 2:
+                avg_score = (results[0]['prob'] + results[1]['prob']) / 2
+                if avg_score >= 80: ment = "🌟 [초강력 추천] 자신감 Max! 금액 태워도 좋습니다."
+                elif avg_score >= 70: ment = "✅ [추천] 안정권입니다. 평소대로 가세요."
+                else: ment = "🤔 [소액 도전] 리스크가 있습니다. 금액 조절하세요."
+                
+                st.markdown("---")
+                st.success(f"""
+                💰 **[오늘의 2폴더 조합]**
+                👉 **{results[0]['pick']}** + **{results[1]['pick']}**
+                
+                📊 **AI 종합 확신 점수: {avg_score:.1f}점**
+                💡 **AI 가이드:** {ment}
+                💸 **총 배당: {(results[0]['odd']*results[1]['odd']):.2f}배**
+                """)
