@@ -2,3 +2,4 @@ streamlit
 pandas
 nba_api
 pytz
+requests
