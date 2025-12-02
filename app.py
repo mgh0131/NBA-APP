@@ -44,7 +44,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.7.1 (Review Master)")
+st.title("🏀 NBAI 3.7.2 (Link Fix)")
 st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 어제 적중률 확인")
 
 # -----------------------------------------------------------
@@ -263,8 +263,8 @@ def check_yesterday():
 # --- 화면 구성 ---
 col1, col2 = st.columns([1, 1])
 with col1:
-    # [수정됨] 네이버 스포츠(모바일)로 바로 연결
-    st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/leagues/nba")
+    # [수정됨] 네이버 스포츠 일정 페이지로 연결 (확실한 주소)
+    st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/nba")
 with col2:
     if st.button("🔙 어제 경기 적중 확인"):
         with st.spinner("어제 경기 결과 채점 중..."):
