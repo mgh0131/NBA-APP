@@ -5,16 +5,45 @@ from nba_api.stats.static import teams
 from datetime import datetime
 import pytz
 
+# ==========================================
+# 🔒 [비밀번호 설정]
+# 여기 "7777"을 원하시는 비밀번호로 바꾸세요!
+# ==========================================
+MY_PASSWORD = st.secrets["password"] 
+
 # --- 페이지 설정 ---
 st.set_page_config(page_title="NBA AI 분석기", page_icon="🏀", layout="wide")
 
-st.title("🏀 NBA AI 승부사 (Mobile Ver.)")
-st.caption("실시간 데이터 분석 + 손익비(EV) 계산기")
+# --- 🔐 로그인 화면 로직 ---
+# 비밀번호가 입력되지 않았거나 틀리면 여기서 멈춤
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
 
-# --- 1. 데이터 로딩 함수 (캐싱 적용으로 속도 향상) ---
-@st.cache_data(ttl=3600) # 1시간마다 데이터 갱신
+if not st.session_state["authenticated"]:
+    st.title("🔒 접속 제한구역")
+    st.write("관계자 외 출입금지입니다.")
+    
+    password_input = st.text_input("비밀번호를 입력하세요:", type="password")
+    
+    if st.button("로그인"):
+        if password_input == MY_PASSWORD:
+            st.session_state["authenticated"] = True
+            st.rerun() # 비밀번호 맞으면 새로고침해서 통과
+        else:
+            st.error("비밀번호가 틀렸습니다!")
+    
+    st.stop() # 비밀번호 통과 전까지 아래 코드 실행 안 함
+
+# ==========================================
+# 👇 여기서부터 원래 분석기 코드 시작
+# ==========================================
+
+st.title("🏀 NBA AI 승부사 (Mobile Ver.)")
+st.caption(f"환영합니다! {datetime.now().strftime('%Y-%m-%d')} 데이터 분석 중...")
+
+# --- 1. 데이터 로딩 함수 (캐싱 적용) ---
+@st.cache_data(ttl=3600)
 def load_nba_data():
-    # 팀명 한글 매핑
     eng_to_kor = {
         'Atlanta Hawks': '애틀랜타', 'Boston Celtics': '보스턴', 'Brooklyn Nets': '브루클린',
         'Charlotte Hornets': '샬럿', 'Chicago Bulls': '시카고', 'Cleveland Cavaliers': '클리블랜드',
@@ -29,7 +58,6 @@ def load_nba_data():
     }
 
     try:
-        # 시즌 데이터
         try:
             standings = leaguestandings.LeagueStandings(season='2025-26')
             df = standings.get_data_frames()[0]
@@ -52,7 +80,6 @@ def load_nba_data():
         df['L10_PCT'] = df['L10'].apply(get_pct)
         team_stats = df.set_index('TeamID').to_dict('index')
 
-        # 오늘 경기 일정
         us_timezone = pytz.timezone("US/Eastern")
         today_us = datetime.now(us_timezone)
         board = scoreboardv2.ScoreboardV2(game_date=today_us.strftime('%m/%d/%Y'))
@@ -93,7 +120,6 @@ else:
     st.success(f"✅ 경기 데이터 로드 완료 ({date_str} 기준)")
     st.markdown("---")
     
-    # 사용자 입력 받기
     input_data = []
     
     for idx, match in enumerate(matches):
@@ -116,12 +142,11 @@ else:
             a_odd = item['a_odd']
             ref_score = item['ref']
             
-            if h_odd == 0 or a_odd == 0: continue # 배당 입력 안하면 패스
+            if h_odd == 0 or a_odd == 0: continue
             
             hs = m['hs']
             as_ = m['as']
             
-            # AI 분석 로직
             h_score = (hs['HomePCT']*0.4) + (hs['PointDiff']*0.03*0.3) + (hs['L10_PCT']*0.3)
             a_score = (as_['RoadPCT']*0.4) + (as_['PointDiff']*0.03*0.3) + (as_['L10_PCT']*0.3)
             
@@ -137,19 +162,16 @@ else:
             elif base_total < 215: pace_adj = -3.0
             ai_total = base_total + pace_adj
             
-            # 손익비(EV) 계산
             h_ev = (win_prob * h_odd) - 1.0
             a_ev = ((1 - win_prob) * a_odd) - 1.0
             
             match_name = f"{m['home']} vs {m['away']}"
             
-            # 승패 추천
             if h_ev > 0 and h_ev > a_ev:
                 results.append({'type': '승패', 'game': match_name, 'pick': f"{m['home']} 승", 'prob': win_prob*100, 'ev': h_ev, 'odd': h_odd})
             elif a_ev > 0 and a_ev > h_ev:
                 results.append({'type': '승패', 'game': match_name, 'pick': f"{m['away']} 승 (역배/플핸)", 'prob': (1-win_prob)*100, 'ev': a_ev, 'odd': a_odd})
             
-            # 언오버 추천
             if ref_score > 0:
                 diff = ai_total - ref_score
                 uo_odd = 1.90
@@ -164,7 +186,6 @@ else:
                     if ev > 0:
                         results.append({'type': '언오버', 'game': match_name, 'pick': f"언더 ▼ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd})
 
-        # 결과 출력
         if not results:
             st.warning("⚠️ 추천할 만한 가치 있는 경기(Value Bet)가 없습니다.")
         else:
@@ -174,7 +195,6 @@ else:
             
             for i, res in enumerate(results):
                 tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
-                color = "green" if i == 0 else "blue"
                 
                 with st.container():
                     st.markdown(f"#### {tier}: [{res['type']}] {res['game']}")
