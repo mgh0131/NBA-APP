@@ -44,7 +44,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.7 (Review Master)")
+st.title("🏀 NBAI 3.7.1 (Review Master)")
 st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 어제 적중률 확인")
 
 # -----------------------------------------------------------
@@ -52,7 +52,6 @@ st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 어제
 # -----------------------------------------------------------
 @st.cache_data(ttl=3600)
 def load_nba_stats():
-    # 시즌 통계 및 전적 데이터만 로딩 (날짜 무관)
     try:
         # 1. 순위 데이터
         try:
@@ -91,10 +90,9 @@ def load_nba_stats():
         return None, None
 
 def get_ai_prediction(home_id, away_id, team_stats, total_log):
-    # AI 예측 로직 (승률 계산)
     hs = team_stats.get(home_id)
     as_ = team_stats.get(away_id)
-    if not hs or not as_: return 0.5, 0 # 데이터 없으면 반반
+    if not hs or not as_: return 0.5, 0, 0
 
     # 상성 계산
     h2h_factor = 0
@@ -119,7 +117,6 @@ def get_ai_prediction(home_id, away_id, team_stats, total_log):
     if a_power < 0.05: a_power = 0.05
     win_prob = h_power / (h_power + a_power)
     
-    # 예상 총점
     ai_total = (hs['PointsPG'] + as_['OppPointsPG'])/2 + (as_['PointsPG'] + hs['OppPointsPG'])/2
     if ai_total > 240: ai_total += 3.0
     elif ai_total < 215: ai_total -= 3.0
@@ -154,7 +151,6 @@ def load_today_data():
     nba_teams = teams.get_teams()
     team_map = {team['id']: team['full_name'] for team in nba_teams}
 
-    # 배당 로딩
     odds_map = {}
     if ODDS_API_KEY:
         try:
@@ -185,10 +181,8 @@ def load_today_data():
         for k, v in odds_map.items():
             if h_eng in k or k in h_eng: my_odds = v; break
 
-        # AI 예측 호출
         win_prob, ai_total, h2h_factor = get_ai_prediction(home_id, away_id, team_stats, total_log)
         
-        # 상성 텍스트
         h2h_text = "상성 중립"
         if h2h_factor > 0: h2h_text = "🔥홈팀 천적 우세"
         elif h2h_factor < 0: h2h_text = "💀홈팀 상성 열세"
@@ -213,7 +207,7 @@ def check_yesterday():
     try:
         board = scoreboardv2.ScoreboardV2(game_date=yesterday.strftime('%m/%d/%Y'))
         games = board.game_header.get_data_frame()
-        lines = board.line_score.get_data_frame() # 점수 정보
+        lines = board.line_score.get_data_frame()
         
         if games.empty: return None
         
@@ -238,7 +232,6 @@ def check_yesterday():
             home_id = game['HOME_TEAM_ID']
             away_id = game['VISITOR_TEAM_ID']
             
-            # 실제 스코어 찾기
             h_line = lines[(lines['GAME_ID'] == game_id) & (lines['TEAM_ID'] == home_id)]
             a_line = lines[(lines['GAME_ID'] == game_id) & (lines['TEAM_ID'] == away_id)]
             
@@ -247,9 +240,7 @@ def check_yesterday():
             h_score = h_line.iloc[0]['PTS']
             a_score = a_line.iloc[0]['PTS']
             real_winner = "Home" if h_score > a_score else "Away"
-            real_total = h_score + a_score
             
-            # AI 예측 (어제 기준 배당은 몰라서 순수 승률만 계산)
             win_prob, ai_total, _ = get_ai_prediction(home_id, away_id, team_stats, total_log)
             ai_pick = "Home" if win_prob > 0.5 else "Away"
             
@@ -262,8 +253,7 @@ def check_yesterday():
                 'match': f"{eng_to_kor.get(h_name, h_name)} vs {eng_to_kor.get(a_name, a_name)}",
                 'score': f"{int(h_score)} : {int(a_score)}",
                 'ai_pick': f"{'홈승' if ai_pick=='Home' else '원정승'} ({win_prob*100:.0f}%)",
-                'result': "✅ 적중" if is_correct else "❌ 미적중",
-                'real_total': int(real_total)
+                'result': "✅ 적중" if is_correct else "❌ 미적중"
             })
             
         return results, yesterday.strftime('%m/%d')
@@ -273,7 +263,8 @@ def check_yesterday():
 # --- 화면 구성 ---
 col1, col2 = st.columns([1, 1])
 with col1:
-    st.link_button("🚑 실시간 부상자 (한글)", "https://translate.google.com/translate?sl=en&tl=ko&u=https://www.espn.com/nba/injuries")
+    # [수정됨] 네이버 스포츠(모바일)로 바로 연결
+    st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/leagues/nba")
 with col2:
     if st.button("🔙 어제 경기 적중 확인"):
         with st.spinner("어제 경기 결과 채점 중..."):
