@@ -44,7 +44,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.1 (Money Manager)")
+st.title("🏀 NBAI 3.2 (Money Manager)")
 st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리(1~10만원) 시스템")
 
 # --- 1. 데이터 로딩 함수 (배당 + 경기데이터 + 상성) ---
@@ -138,10 +138,9 @@ def load_data_with_odds():
             hs = team_stats.get(home_id)
             as_ = team_stats.get(away_id)
             
-            # 상성 계산 (대소문자 수정 완료)
+            # 상성 계산
             h2h_text = "기록 없음"; h2h_factor = 0
             if not total_log.empty:
-                # TEAM_ID, GAME_ID 대문자로 수정
                 if 'TEAM_ID' in total_log.columns:
                     h_games = total_log[total_log['TEAM_ID'] == home_id]['GAME_ID'].unique()
                     a_games = total_log[total_log['TEAM_ID'] == away_id]['GAME_ID'].unique()
@@ -265,12 +264,11 @@ else:
                 tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
                 if res['money'] < MIN_BET: res['money'] = MIN_BET
                 
-                money_str = f"💸 권장 배팅금: {int(res['money']):,}원"
-                
+                # [수정] 개별 경기에는 금액 표시 안 함!
                 if "주의" in res['game']:
-                    st.error(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n{money_str} (가치 {res['ev']:.2f})")
+                    st.error(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
                 else:
-                    st.info(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n{money_str} (가치 {res['ev']:.2f})")
+                    st.info(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
             
             if len(results) >= 2:
                 avg_score = (results[0]['prob'] + results[1]['prob']) / 2
