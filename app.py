@@ -44,8 +44,8 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.7.2 (Link Fix)")
-st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 어제 적중률 확인")
+st.title("🏀 NBAI 3.7.3 (Final Fix)")
+st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 링크 수리 완료")
 
 # -----------------------------------------------------------
 # [공통 함수] 데이터 로딩 및 분석
@@ -53,7 +53,6 @@ st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 어제
 @st.cache_data(ttl=3600)
 def load_nba_stats():
     try:
-        # 1. 순위 데이터
         try:
             standings = leaguestandings.LeagueStandings(season='2025-26')
             df = standings.get_data_frames()[0]
@@ -76,7 +75,6 @@ def load_nba_stats():
         df['L10_PCT'] = df['L10'].apply(get_pct)
         team_stats = df.set_index('TeamID').to_dict('index')
 
-        # 2. 맞대결(H2H) 로그
         logs = []
         for s in ['2024-25', '2023-24']:
             try:
@@ -94,7 +92,6 @@ def get_ai_prediction(home_id, away_id, team_stats, total_log):
     as_ = team_stats.get(away_id)
     if not hs or not as_: return 0.5, 0, 0
 
-    # 상성 계산
     h2h_factor = 0
     if not total_log.empty and 'TEAM_ID' in total_log.columns:
         h_games = total_log[total_log['TEAM_ID'] == home_id]['GAME_ID'].unique()
@@ -109,7 +106,6 @@ def get_ai_prediction(home_id, away_id, team_stats, total_log):
             if win_rate >= 0.7: h2h_factor = 0.15
             elif win_rate <= 0.3: h2h_factor = -0.15
 
-    # 전력 분석
     h_power = (hs['HomePCT']*0.4) + (hs['PointDiff']*0.03*0.3) + (hs['L10_PCT']*0.3) + h2h_factor
     a_power = (as_['RoadPCT']*0.4) + (as_['PointDiff']*0.03*0.3) + (as_['L10_PCT']*0.3)
     
@@ -263,8 +259,8 @@ def check_yesterday():
 # --- 화면 구성 ---
 col1, col2 = st.columns([1, 1])
 with col1:
-    # [수정됨] 네이버 스포츠 일정 페이지로 연결 (확실한 주소)
-    st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/nba")
+    # [수정됨] 네이버 스포츠 NBA 일정 페이지 (정확한 주소)
+    st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/index.nhn?category=nba")
 with col2:
     if st.button("🔙 어제 경기 적중 확인"):
         with st.spinner("어제 경기 결과 채점 중..."):
@@ -327,7 +323,7 @@ else:
             match_name = f"{m['home']} vs {m['away']}"
             note = f" | {m['h2h_text']}" if "천적" in m['h2h_text'] or "열세" in m['h2h_text'] else ""
             
-            # 자금 관리 로직
+            # [개별 경기 금액 계산] - 여기는 참고용이라 그냥 둠
             def calc_money(ev_score, prob_score):
                 if ev_score <= 0: return 0
                 ratio = min(ev_score / 0.20, 1.0)
@@ -371,8 +367,10 @@ else:
                     st.info(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
             
             if len(results) >= 2:
+                # [여기가 핵심 수정] 최종 자금 계산 로직을 '확신도(점수)'에 종속시킴
                 avg_score = (results[0]['prob'] + results[1]['prob']) / 2
                 
+                # 점수대별로 최대 금액 한도(Cap)를 설정함
                 if avg_score >= 80:
                     ment = "🌟 [초강력] 오늘 가장 확실한 조합입니다. 상한가(10만원) 근접 추천!"
                     base_money = 80000; max_money = 100000
@@ -381,10 +379,12 @@ else:
                     base_money = 40000; max_money = 70000
                 else:
                     ment = "🤔 [도전] 소액으로 고배당을 노려볼 만합니다."
-                    base_money = 10000; max_money = 30000
+                    base_money = 10000; max_money = 30000 # 도전 단계는 절대 3만원을 넘지 않음
                 
+                # 구간 내에서 EV(가치)에 따라 세부 금액 조절
                 avg_ev = (results[0]['ev'] + results[1]['ev']) / 2
                 ev_ratio = min(avg_ev / 0.2, 1.0) 
+                
                 final_money = base_money + (max_money - base_money) * ev_ratio
                 final_money = round(final_money, -3)
 
