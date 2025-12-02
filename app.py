@@ -44,7 +44,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.2 (Money Manager)")
+st.title("🏀 NBAI 3.3 (Money Manager)")
 st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리(1~10만원) 시스템")
 
 # --- 1. 데이터 로딩 함수 (배당 + 경기데이터 + 상성) ---
@@ -229,31 +229,40 @@ else:
             match_name = f"{m['home']} vs {m['away']}"
             note = f" | {rival_badge}" if rival_badge else ""
             
-            # [자금 관리 로직]
-            def calc_money(ev_score):
+            # [수정된 자금 관리 로직] 승률(Prob) 낮으면 금액 강제 하향
+            def calc_money(ev_score, prob_score):
                 if ev_score <= 0: return 0
+                
+                # 기본 비율 계산
                 ratio = min(ev_score / 0.20, 1.0)
                 amount = MIN_BET + (MAX_BET - MIN_BET) * ratio
+                
+                # [안전장치] 승률이 60% 미만이면 금액 절반으로 뚝!
+                if prob_score < 0.60:
+                    amount = amount * 0.4 # 과감하게 40% 수준으로 낮춤
+                    if amount < MIN_BET: amount = MIN_BET # 그래도 최소금액은 유지
+                    
                 return round(amount, -3)
 
             if h_ev > 0 and h_ev > a_ev:
-                bet_money = calc_money(h_ev)
+                bet_money = calc_money(h_ev, win_prob)
                 results.append({'type': '승패', 'game': match_name + note, 'pick': f"{m['home']} 승", 'prob': win_prob*100, 'ev': h_ev, 'odd': h_odd, 'money': bet_money})
             elif a_ev > 0 and a_ev > h_ev:
-                bet_money = calc_money(a_ev)
+                bet_money = calc_money(a_ev, 1-win_prob)
                 results.append({'type': '승패', 'game': match_name + note, 'pick': f"{m['away']} 승 (역배/플핸)", 'prob': (1-win_prob)*100, 'ev': a_ev, 'odd': a_odd, 'money': bet_money})
             
             if ref_score > 0:
                 diff = ai_total - ref_score
                 uo_odd = 1.90
+                # 언오버는 승률 계산이 복잡하므로 보수적으로 50% 가정해서 계산
                 if diff >= 3.0:
                     prob = 55 + diff; prob = 80 if prob > 80 else prob
                     ev = (prob/100 * uo_odd) - 1.0
-                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"오버 ▲ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd, 'money': calc_money(ev*1.5)})
+                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"오버 ▲ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd, 'money': calc_money(ev*1.5, prob/100)})
                 elif diff <= -3.0:
                     prob = 55 + abs(diff); prob = 80 if prob > 80 else prob
                     ev = (prob/100 * uo_odd) - 1.0
-                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"언더 ▼ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd, 'money': calc_money(ev*1.5)})
+                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"언더 ▼ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd, 'money': calc_money(ev*1.5, prob/100)})
 
         if not results:
             st.warning("⚠️ 추천할 만한 가치 있는 경기(Value Bet)가 없습니다.")
@@ -264,7 +273,7 @@ else:
                 tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
                 if res['money'] < MIN_BET: res['money'] = MIN_BET
                 
-                # [수정] 개별 경기에는 금액 표시 안 함!
+                # 개별 경기 리포트 (금액 표시 X)
                 if "주의" in res['game']:
                     st.error(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
                 else:
