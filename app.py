@@ -44,8 +44,8 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.4 (Final Fix)")
-st.caption("해외 배당 자동 로딩 + 천적 분석 + 칼같은 자금 관리")
+st.title("🏀 NBAI 3.5 (Link Master)")
+st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 부상자 확인 링크")
 
 # --- 1. 데이터 로딩 함수 (배당 + 경기데이터 + 상성) ---
 @st.cache_data(ttl=3600)
@@ -179,6 +179,10 @@ if matches is None:
     st.error(f"데이터 로딩 실패: {date_str}")
 else:
     st.success(f"✅ 분석 준비 완료 ({date_str})")
+    
+    # [추가된 부분] 부상자 확인 링크 버튼
+    st.link_button("🚑 실시간 부상자 명단 확인 (ESPN)", "https://www.espn.com/nba/injuries")
+    
     st.markdown("---")
     
     input_data = []
@@ -253,6 +257,7 @@ else:
             st.subheader("🏆 NBAI 최종 추천 리포트")
             for i, res in enumerate(results):
                 tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
+                
                 # 개별 경기 리포트
                 if "주의" in res['game']:
                     st.error(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
@@ -261,10 +266,9 @@ else:
             
             if len(results) >= 2:
                 # [최종 자금 계산 로직 개선]
-                # 1. 두 경기의 평균 확률(점수) 계산
                 avg_score = (results[0]['prob'] + results[1]['prob']) / 2
                 
-                # 2. 점수대별 금액 구간 및 멘트 강제 할당
+                # 점수대별 금액 구간 및 멘트 강제 할당 (3.4 버전 로직 유지)
                 if avg_score >= 80:
                     ment = "🌟 [초강력] 오늘 가장 확실한 조합입니다. 상한가(10만원) 근접 추천!"
                     base_money = 80000 
@@ -278,12 +282,11 @@ else:
                     base_money = 10000
                     max_money = 30000
                 
-                # 3. 구간 내에서 EV(가치)에 따라 세부 금액 조절
+                # 구간 내에서 EV(가치)에 따라 세부 금액 조절
                 avg_ev = (results[0]['ev'] + results[1]['ev']) / 2
-                # EV가 0.2 이상이면 구간 내 최대치, 아니면 비율대로
                 ev_ratio = min(avg_ev / 0.2, 1.0) 
                 final_money = base_money + (max_money - base_money) * ev_ratio
-                final_money = round(final_money, -3) # 천원 단위 반올림
+                final_money = round(final_money, -3)
 
                 st.markdown("---")
                 st.success(f"""
