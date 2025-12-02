@@ -44,8 +44,8 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.3 (Money Manager)")
-st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리(1~10만원) 시스템")
+st.title("🏀 NBAI 3.4 (Final Fix)")
+st.caption("해외 배당 자동 로딩 + 천적 분석 + 칼같은 자금 관리")
 
 # --- 1. 데이터 로딩 함수 (배당 + 경기데이터 + 상성) ---
 @st.cache_data(ttl=3600)
@@ -229,40 +229,22 @@ else:
             match_name = f"{m['home']} vs {m['away']}"
             note = f" | {rival_badge}" if rival_badge else ""
             
-            # [수정된 자금 관리 로직] 승률(Prob) 낮으면 금액 강제 하향
-            def calc_money(ev_score, prob_score):
-                if ev_score <= 0: return 0
-                
-                # 기본 비율 계산
-                ratio = min(ev_score / 0.20, 1.0)
-                amount = MIN_BET + (MAX_BET - MIN_BET) * ratio
-                
-                # [안전장치] 승률이 60% 미만이면 금액 절반으로 뚝!
-                if prob_score < 0.60:
-                    amount = amount * 0.4 # 과감하게 40% 수준으로 낮춤
-                    if amount < MIN_BET: amount = MIN_BET # 그래도 최소금액은 유지
-                    
-                return round(amount, -3)
-
             if h_ev > 0 and h_ev > a_ev:
-                bet_money = calc_money(h_ev, win_prob)
-                results.append({'type': '승패', 'game': match_name + note, 'pick': f"{m['home']} 승", 'prob': win_prob*100, 'ev': h_ev, 'odd': h_odd, 'money': bet_money})
+                results.append({'type': '승패', 'game': match_name + note, 'pick': f"{m['home']} 승", 'prob': win_prob*100, 'ev': h_ev, 'odd': h_odd})
             elif a_ev > 0 and a_ev > h_ev:
-                bet_money = calc_money(a_ev, 1-win_prob)
-                results.append({'type': '승패', 'game': match_name + note, 'pick': f"{m['away']} 승 (역배/플핸)", 'prob': (1-win_prob)*100, 'ev': a_ev, 'odd': a_odd, 'money': bet_money})
+                results.append({'type': '승패', 'game': match_name + note, 'pick': f"{m['away']} 승 (역배/플핸)", 'prob': (1-win_prob)*100, 'ev': a_ev, 'odd': a_odd})
             
             if ref_score > 0:
                 diff = ai_total - ref_score
                 uo_odd = 1.90
-                # 언오버는 승률 계산이 복잡하므로 보수적으로 50% 가정해서 계산
                 if diff >= 3.0:
                     prob = 55 + diff; prob = 80 if prob > 80 else prob
                     ev = (prob/100 * uo_odd) - 1.0
-                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"오버 ▲ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd, 'money': calc_money(ev*1.5, prob/100)})
+                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"오버 ▲ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd})
                 elif diff <= -3.0:
                     prob = 55 + abs(diff); prob = 80 if prob > 80 else prob
                     ev = (prob/100 * uo_odd) - 1.0
-                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"언더 ▼ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd, 'money': calc_money(ev*1.5, prob/100)})
+                    if ev > 0: results.append({'type': '언오버', 'game': match_name, 'pick': f"언더 ▼ (기준 {ref_score})", 'prob': prob, 'ev': ev, 'odd': uo_odd})
 
         if not results:
             st.warning("⚠️ 추천할 만한 가치 있는 경기(Value Bet)가 없습니다.")
@@ -271,28 +253,43 @@ else:
             st.subheader("🏆 NBAI 최종 추천 리포트")
             for i, res in enumerate(results):
                 tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
-                if res['money'] < MIN_BET: res['money'] = MIN_BET
-                
-                # 개별 경기 리포트 (금액 표시 X)
+                # 개별 경기 리포트
                 if "주의" in res['game']:
                     st.error(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
                 else:
                     st.info(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
             
             if len(results) >= 2:
+                # [최종 자금 계산 로직 개선]
+                # 1. 두 경기의 평균 확률(점수) 계산
                 avg_score = (results[0]['prob'] + results[1]['prob']) / 2
-                total_bet_rec = (results[0]['money'] + results[1]['money']) / 2
-                total_bet_rec = round(total_bet_rec, -3)
-
-                if avg_score >= 80: ment = "🌟 [초강력] 오늘 가장 확실한 조합입니다. 상한가(10만원) 근접 추천!"
-                elif avg_score >= 70: ment = "✅ [안정] 꾸준히 수익 내기 좋은 조합입니다."
-                else: ment = "🤔 [도전] 소액으로 고배당을 노려볼 만합니다."
                 
+                # 2. 점수대별 금액 구간 및 멘트 강제 할당
+                if avg_score >= 80:
+                    ment = "🌟 [초강력] 오늘 가장 확실한 조합입니다. 상한가(10만원) 근접 추천!"
+                    base_money = 80000 
+                    max_money = 100000
+                elif avg_score >= 70:
+                    ment = "✅ [안정] 꾸준히 수익 내기 좋은 조합입니다."
+                    base_money = 40000
+                    max_money = 70000
+                else:
+                    ment = "🤔 [도전] 소액으로 고배당을 노려볼 만합니다."
+                    base_money = 10000
+                    max_money = 30000
+                
+                # 3. 구간 내에서 EV(가치)에 따라 세부 금액 조절
+                avg_ev = (results[0]['ev'] + results[1]['ev']) / 2
+                # EV가 0.2 이상이면 구간 내 최대치, 아니면 비율대로
+                ev_ratio = min(avg_ev / 0.2, 1.0) 
+                final_money = base_money + (max_money - base_money) * ev_ratio
+                final_money = round(final_money, -3) # 천원 단위 반올림
+
                 st.markdown("---")
                 st.success(f"""
                 💰 **[오늘의 2폴더 조합]**
                 👉 **{results[0]['pick']}** + **{results[1]['pick']}**
                 
-                💸 **권장 배팅금: {int(total_bet_rec):,}원**
+                💸 **권장 배팅금: {int(final_money):,}원**
                 💡 **AI 가이드:** {ment}
                 """)
