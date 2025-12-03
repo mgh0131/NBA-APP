@@ -52,7 +52,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 6.4 (Real-time Sync)")
+st.title("🏀 NBAI 6.5 (Instant Sync)")
 
 tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"])
 
@@ -64,13 +64,12 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_ledger_data():
     if not SHEET_URL: return pd.DataFrame()
     try:
-        # [핵심 수정] ttl=0 으로 설정하여 캐시를 끄고 항상 최신 데이터를 가져옴
+        # [핵심] ttl=0으로 설정하여 항상 최신 데이터 로딩
         df = conn.read(spreadsheet=SHEET_URL, ttl=0)
         if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         df['날짜'] = df['날짜'].astype(str)
         return df
-    except Exception as e:
-        # 에러 발생 시 빈 데이터프레임 반환 (화면에는 표시 안 함)
+    except:
         return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
 
 def add_ledger_entry(entry):
@@ -85,14 +84,17 @@ def add_ledger_entry(entry):
         else: updated_df = pd.concat([df, new_row], ignore_index=True)
         
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
+        # [핵심] 저장 후 캐시 날리기 (즉시 반영)
+        st.cache_data.clear() 
         return True
     except Exception as e:
-        st.error(f"❌ 저장 에러: {e}") # 에러 메시지 직접 출력
+        st.error(f"❌ 저장 에러: {e}")
         return False
 
 def update_ledger_data(updated_df):
     try:
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"❌ 수정 에러: {e}")
@@ -326,6 +328,7 @@ with tab1:
                             }
                             if add_ledger_entry(entry):
                                 st.success("✅ 장부에 저장했습니다! [가계부] 탭을 확인하세요.")
+                                st.balloons() # 성공 축하 효과
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
