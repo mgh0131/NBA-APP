@@ -8,14 +8,14 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# 🔒 [비밀번호 & 키 설정]
+# 🔒 [설정 로딩]
 # ==========================================
 try:
     MY_PASSWORD = st.secrets.get("password", "7777")
     ODDS_API_KEYS = st.secrets.get("odds_api_keys", [])
     if isinstance(ODDS_API_KEYS, str): ODDS_API_KEYS = [ODDS_API_KEYS]
     
-    # 구글 시트 URL 안전하게 가져오기
+    # 구글 시트 주소 확인
     if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
         SHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
     elif "spreadsheet_url" in st.secrets:
@@ -54,7 +54,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 5.3 (Debug Mode)")
+st.title("🏀 NBAI 5.4 (Last Hope)")
 
 tab1, tab2 = st.tabs(["🚀 오늘의 분석", "☁️ 클라우드 가계부"])
 
@@ -68,31 +68,29 @@ def get_ledger_data():
     try:
         df = conn.read(spreadsheet=SHEET_URL)
         if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
-        # 날짜 포맷 통일 (문자열로 변환)
+        # 날짜 문자열 변환 (에러 방지)
         df['날짜'] = df['날짜'].astype(str)
         return df
     except Exception as e:
-        # st.error(f"읽기 오류: {e}") # 디버깅용
+        # st.error(f"읽기 에러: {e}") 
         return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
 
 def add_ledger_entry(entry):
     if not SHEET_URL:
-        st.error("구글 시트 주소가 설정되지 않았습니다.")
+        st.error("구글 시트 주소가 없습니다.")
         return False
     try:
         df = get_ledger_data()
         new_row = pd.DataFrame([entry])
         
-        # 빈 데이터프레임 처리
-        if df.empty:
-            updated_df = new_row
-        else:
-            updated_df = pd.concat([df, new_row], ignore_index=True)
+        if df.empty: updated_df = new_row
+        else: updated_df = pd.concat([df, new_row], ignore_index=True)
             
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
         return True
     except Exception as e:
-        st.error(f"❌ 저장 실패 (에러 내용): {e}") # 에러 내용을 화면에 출력
+        st.error(f"❌ 저장 실패 (원인): {e}") 
+        st.info("💡 팁: 구글 시트 공유 설정에서 'nba-bot' 이메일을 [편집자]로 초대했는지 확인하세요!")
         return False
 
 def clear_ledger():
@@ -101,9 +99,7 @@ def clear_ledger():
         empty_df = pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         conn.update(spreadsheet=SHEET_URL, data=empty_df)
         return True
-    except Exception as e:
-        st.error(f"초기화 실패: {e}")
-        return False
+    except: return False
 
 # -----------------------------------------------------------
 # [기타 기능]
@@ -303,7 +299,14 @@ with tab1:
                     ment = "✅ [안정] 꾸준한 수익 추천" if avg_score >= 70 else "🤔 [도전] 소액 추천"
                     if avg_score >= 80: ment = "🌟 [초강력] 풀매수 추천"
                     
-                    final_money = (results[0]['money'] + results[1]['money']) / 2
+                    # 강제 금액 할당
+                    base_money = 10000; max_money = 30000
+                    if avg_score >= 70: base_money = 40000; max_money = 70000
+                    if avg_score >= 80: base_money = 80000; max_money = 100000
+                    
+                    avg_ev = (results[0]['ev'] + results[1]['ev']) / 2
+                    ev_ratio = min(avg_ev / 0.2, 1.0)
+                    final_money = base_money + (max_money - base_money) * ev_ratio
                     final_money = round(final_money, -3)
                     
                     st.markdown("---")
@@ -347,7 +350,6 @@ with tab2:
     df = get_ledger_data()
     
     if not df.empty:
-        # 손익 계산을 위해 숫자형으로 변환 시도
         try:
             total_profit = df['손익'].astype(int).sum()
             color = "green" if total_profit >= 0 else "red"
