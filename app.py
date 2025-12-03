@@ -44,8 +44,8 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 3.7.3 (Final Fix)")
-st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 링크 수리 완료")
+st.title("🏀 NBAI 3.8.1 (Review Fix)")
+st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리 + 적중 확인 수리완료")
 
 # -----------------------------------------------------------
 # [공통 함수] 데이터 로딩 및 분석
@@ -119,9 +119,6 @@ def get_ai_prediction(home_id, away_id, team_stats, total_log):
     
     return win_prob, ai_total, h2h_factor
 
-# -----------------------------------------------------------
-# [메인] 오늘 경기 분석 함수
-# -----------------------------------------------------------
 @st.cache_data(ttl=3600)
 def load_today_data():
     eng_to_kor = {
@@ -193,20 +190,30 @@ def load_today_data():
     return match_data, today_us.strftime('%Y-%m-%d')
 
 # -----------------------------------------------------------
-# [신규] 어제 경기 결과 확인 함수
+# [수정됨] 어제 경기 결과 확인 함수 (로직 강화)
 # -----------------------------------------------------------
 def check_yesterday():
     team_stats, total_log = load_nba_stats()
     us_timezone = pytz.timezone("US/Eastern")
+    # '어제' 날짜를 확실하게 계산 (현재 미국시간 - 1일)
     yesterday = datetime.now(us_timezone) - timedelta(days=1)
+    target_date = yesterday.strftime('%m/%d/%Y')
     
     try:
-        board = scoreboardv2.ScoreboardV2(game_date=yesterday.strftime('%m/%d/%Y'))
+        # ScoreboardV2 호출
+        board = scoreboardv2.ScoreboardV2(game_date=target_date)
         games = board.game_header.get_data_frame()
         lines = board.line_score.get_data_frame()
         
-        if games.empty: return None
+        if games.empty:
+            return None, f"{target_date} (경기 없음)"
         
+        # 경기 상태 확인 (3=종료)
+        finished_games = games[games['GAME_STATUS_ID'] == 3]
+        
+        if finished_games.empty:
+            return None, f"{target_date} (종료된 경기 없음)"
+
         nba_teams = teams.get_teams()
         team_map = {team['id']: team['full_name'] for team in nba_teams}
         eng_to_kor = {
@@ -223,7 +230,7 @@ def check_yesterday():
         }
         
         results = []
-        for i, game in games.iterrows():
+        for i, game in finished_games.iterrows():
             game_id = game['GAME_ID']
             home_id = game['HOME_TEAM_ID']
             away_id = game['VISITOR_TEAM_ID']
@@ -252,31 +259,58 @@ def check_yesterday():
                 'result': "✅ 적중" if is_correct else "❌ 미적중"
             })
             
-        return results, yesterday.strftime('%m/%d')
+        return results, target_date
         
-    except: return None
+    except Exception as e:
+        return None, f"오류 발생: {str(e)}"
 
 # --- 화면 구성 ---
 col1, col2 = st.columns([1, 1])
 with col1:
-    # [수정됨] 네이버 스포츠 NBA 일정 페이지 (정확한 주소)
     st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/index.nhn?category=nba")
 with col2:
     if st.button("🔙 어제 경기 적중 확인"):
-        with st.spinner("어제 경기 결과 채점 중..."):
+        with st.spinner("채점 중..."):
             res_data, y_date = check_yesterday()
             if res_data:
-                st.write(f"### 📅 {y_date} NBAI 성적표")
+                st.write(f"### 📅 {y_date} (미국시간 기준) 성적표")
                 hit_cnt = sum(1 for r in res_data if "✅" in r['result'])
                 total_cnt = len(res_data)
                 acc = (hit_cnt / total_cnt * 100) if total_cnt > 0 else 0
                 
                 st.info(f"총 {total_cnt}경기 중 **{hit_cnt}경기 적중** (승률 {acc:.1f}%)")
-                
-                df_res = pd.DataFrame(res_data)
-                st.table(df_res[['match', 'score', 'ai_pick', 'result']])
+                st.table(pd.DataFrame(res_data)[['match', 'score', 'ai_pick', 'result']])
             else:
-                st.warning("어제 경기가 없거나 데이터를 불러올 수 없습니다.")
+                st.warning(f"데이터를 불러올 수 없습니다: {y_date}")
+
+# [핵심 선수 족보]
+with st.expander("🏀 팀별 핵심 선수 명단 (족보) - 클릭해서 펼치기"):
+    st.markdown("""
+    ### 🚨 이 선수 빠지면 베팅 금지 (Pass)
+    
+    | 서부 (West) | 👑 **1옵션 (핵심)** | ⚔️ **2옵션** |
+    | :--- | :--- | :--- |
+    | **덴버** | **요키치 (Jokic)** 🚨 | 머레이 |
+    | **미네소타** | **에드워즈 (Edwards)** | 랜들/고베어 |
+    | **오클라호마** | **S.알렉산더 (SGA)** 🚨 | 홈그렌 |
+    | **골든스테이트** | **커리 (Curry)** 🚨 | 그린 |
+    | **LA 레이커스** | **르브론 (LeBron)** | A.데이비스 |
+    | **피닉스** | **듀란트 (Durant)** | 부커 |
+    | **댈러스** | **돈치치 (Doncic)** 🚨 | 어빙 |
+    | **멤피스** | **모란트 (Morant)** 🚨 | JJJ |
+    | **샌안토니오** | **웸반야마 (Wemby)** 🚨 | 크리스 폴 |
+
+    | 동부 (East) | 👑 **1옵션 (핵심)** | ⚔️ **2옵션** |
+    | :--- | :--- | :--- |
+    | **보스턴** | **테이텀 (Tatum)** 🚨 | 브라운 |
+    | **뉴욕** | **브런슨 (Brunson)** 🚨 | 타운스 |
+    | **필라델피아** | **엠비드 (Embiid)** 🚨 | 조지/맥시 |
+    | **밀워키** | **아데토쿤보 (Giannis)** 🚨 | 릴라드 |
+    | **클리블랜드** | **미첼 (Mitchell)** | 갈란드 |
+    | **인디애나** | **할리버튼 (Hali)** 🚨 | 시아캄 |
+    | **애틀랜타** | **트레이 영 (Young)** | J.존슨 |
+    | **마이애미** | **버틀러 (Butler)** | 아데바요 |
+    """)
 
 st.markdown("---")
 
@@ -316,14 +350,12 @@ else:
             win_prob = m['prob']
             ai_total = m['total']
             
-            # EV 계산
             h_ev = (win_prob * h_odd) - 1.0
             a_ev = ((1 - win_prob) * a_odd) - 1.0
             
             match_name = f"{m['home']} vs {m['away']}"
             note = f" | {m['h2h_text']}" if "천적" in m['h2h_text'] or "열세" in m['h2h_text'] else ""
             
-            # [개별 경기 금액 계산] - 여기는 참고용이라 그냥 둠
             def calc_money(ev_score, prob_score):
                 if ev_score <= 0: return 0
                 ratio = min(ev_score / 0.20, 1.0)
@@ -367,10 +399,8 @@ else:
                     st.info(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})\n\n(확률 {res['prob']:.1f}% / 가치 {res['ev']:.2f})")
             
             if len(results) >= 2:
-                # [여기가 핵심 수정] 최종 자금 계산 로직을 '확신도(점수)'에 종속시킴
                 avg_score = (results[0]['prob'] + results[1]['prob']) / 2
                 
-                # 점수대별로 최대 금액 한도(Cap)를 설정함
                 if avg_score >= 80:
                     ment = "🌟 [초강력] 오늘 가장 확실한 조합입니다. 상한가(10만원) 근접 추천!"
                     base_money = 80000; max_money = 100000
@@ -379,12 +409,10 @@ else:
                     base_money = 40000; max_money = 70000
                 else:
                     ment = "🤔 [도전] 소액으로 고배당을 노려볼 만합니다."
-                    base_money = 10000; max_money = 30000 # 도전 단계는 절대 3만원을 넘지 않음
+                    base_money = 10000; max_money = 30000
                 
-                # 구간 내에서 EV(가치)에 따라 세부 금액 조절
                 avg_ev = (results[0]['ev'] + results[1]['ev']) / 2
                 ev_ratio = min(avg_ev / 0.2, 1.0) 
-                
                 final_money = base_money + (max_money - base_money) * ev_ratio
                 final_money = round(final_money, -3)
 
