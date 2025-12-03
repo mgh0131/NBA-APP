@@ -52,14 +52,15 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 6.6 (Auto Switch)")
+st.title("🏀 NBAI 6.7 (Auto Fill)")
 
-# [핵심] 스마트 네비게이션 (탭 대신 라디오 버튼 사용)
-# 세션 스테이트를 이용해 페이지를 강제로 제어합니다.
+# [핵심] 스마트 네비게이션 & 데이터 전달
 if 'current_view' not in st.session_state:
     st.session_state['current_view'] = "🚀 오늘의 분석"
+if 'auto_fill_data' not in st.session_state:
+    st.session_state['auto_fill_data'] = None
 
-# 상단 메뉴바 (탭처럼 보이게 가로로 배치)
+# 상단 메뉴바
 view = st.radio(
     "메뉴 선택", 
     ["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"], 
@@ -69,7 +70,6 @@ view = st.radio(
     index=0 if st.session_state['current_view'] == "🚀 오늘의 분석" else 1
 )
 
-# 라디오 버튼 선택 시 세션 상태 동기화
 if view != st.session_state['current_view']:
     st.session_state['current_view'] = view
     st.rerun()
@@ -82,7 +82,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_ledger_data():
     if not SHEET_URL: return pd.DataFrame()
     try:
-        # 캐시 없이 즉시 로딩 (ttl=0)
         df = conn.read(spreadsheet=SHEET_URL, ttl=0)
         if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         df['날짜'] = df['날짜'].astype(str)
@@ -100,7 +99,7 @@ def add_ledger_entry(entry):
         if df.empty: updated_df = new_row
         else: updated_df = pd.concat([df, new_row], ignore_index=True)
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
-        st.cache_data.clear() # 캐시 날리기
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -315,8 +314,9 @@ if st.session_state['current_view'] == "🚀 오늘의 분석":
                     
                     final_money = (results[0]['money'] + results[1]['money']) / 2
                     final_money = round(final_money, -3)
+                    
                     total_odds = results[0]['odd'] * results[1]['odd']
-                    expected_win = final_money * total_odds
+                    expected_return = final_money * total_odds
                     
                     st.markdown("---")
                     st.success(f"""
@@ -324,25 +324,21 @@ if st.session_state['current_view'] == "🚀 오늘의 분석":
                     👉 **{results[0]['pick']}** + **{results[1]['pick']}**
                     
                     💸 **권장 배팅금: {int(final_money):,}원**
-                    💵 **예상 당첨금: {int(expected_win):,}원** (총 배당 {total_odds:.2f}배)
+                    💵 **예상 당첨금: {int(expected_return):,}원** (총 배당 {total_odds:.2f}배)
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    # [핵심] 장부 자동 저장 후 페이지 이동
-                    if st.button("📓 이 조합을 장부에 담고 이동 (클릭)", key="auto_save"):
-                        with st.spinner("장부에 기록하고 이동합니다..."):
-                            entry = {
-                                '날짜': datetime.now().strftime("%Y-%m-%d"),
-                                '내용': f"{results[0]['pick']} + {results[1]['pick']}",
-                                '금액': int(final_money),
-                                '배당': float(f"{total_odds:.2f}"),
-                                '결과': '대기중',
-                                '손익': 0
-                            }
-                            if add_ledger_entry(entry):
-                                # 저장 성공 시 페이지 강제 전환
-                                st.session_state['current_view'] = "📈 자산 대시보드 (가계부)"
-                                st.rerun()
+                    # [핵심] 장부 자동 저장 데이터 세팅 (저장 X, 전달 O)
+                    if st.button("📓 이 조합을 장부에 담고 이동 (클릭)", key="auto_fill"):
+                        st.session_state['auto_fill_data'] = {
+                            '날짜': datetime.now().strftime("%Y-%m-%d"),
+                            '내용': f"{results[0]['pick']} + {results[1]['pick']}",
+                            '금액': int(final_money),
+                            '배당': float(f"{total_odds:.2f}"),
+                            '결과': '대기중'
+                        }
+                        st.session_state['current_view'] = "📈 자산 대시보드 (가계부)"
+                        st.rerun()
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
@@ -351,6 +347,48 @@ if st.session_state['current_view'] == "🚀 오늘의 분석":
 elif st.session_state['current_view'] == "📈 자산 대시보드 (가계부)":
     st.header("📈 자산 대시보드")
     
+    # 자동 채우기 데이터 확인
+    auto_data = st.session_state.get('auto_fill_data')
+    
+    # 1. 입력 폼 (자동 데이터 있으면 채워짐)
+    with st.expander("➕ 새 기록 추가하기 (자동 채움)", expanded=True if auto_data else False):
+        with st.form("cloud_ledger", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            date_val = datetime.strptime(auto_data['날짜'], "%Y-%m-%d") if auto_data else datetime.now()
+            desc_val = auto_data['내용'] if auto_data else "골스 승"
+            
+            date_in = c1.date_input("날짜", date_val)
+            desc_in = c2.text_input("내용", desc_val)
+            
+            c3, c4, c5 = st.columns(3)
+            amt_val = auto_data['금액'] if auto_data else 30000
+            odd_val = auto_data['배당'] if auto_data else 1.9
+            
+            amt_in = c3.number_input("금액", 0, 1000000, amt_val, 1000)
+            odd_in = c4.number_input("배당", 1.0, 20.0, odd_val, 0.1)
+            res_in = c5.selectbox("결과", ["대기중", "적중", "미적중"])
+            
+            if st.form_submit_button("저장"):
+                # 손익 계산
+                if res_in == "적중": profit = int((amt_in * odd_in) - amt_in)
+                elif res_in == "미적중": profit = int(-amt_in)
+                else: profit = 0
+                    
+                entry = {
+                    '날짜': date_in.strftime("%Y-%m-%d"),
+                    '내용': desc_in,
+                    '금액': amt_in,
+                    '배당': odd_in,
+                    '결과': res_in,
+                    '손익': profit
+                }
+                if add_ledger_entry(entry):
+                    st.success("저장 완료!")
+                    # 저장 후 임시 데이터 초기화
+                    st.session_state['auto_fill_data'] = None
+                    st.rerun()
+
+    # 2. 데이터 출력 및 그래프
     df = get_ledger_data()
     
     if not df.empty:
