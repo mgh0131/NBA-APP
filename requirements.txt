@@ -3,3 +3,4 @@ pandas
 nba_api
 pytz
 requests
+st-gsheets-connection
