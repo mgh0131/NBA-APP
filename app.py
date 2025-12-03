@@ -52,7 +52,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 7.0 (One-Touch Save)")
+st.title("🏀 NBAI 7.1 (Reset & Write)")
 
 tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"])
 
@@ -64,10 +64,12 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_ledger_data():
     if not SHEET_URL: return pd.DataFrame()
     try:
-        # 캐시 끄고(ttl=0) 항상 최신 장부 가져오기
+        # 캐시 끄고 최신 로딩
         df = conn.read(spreadsheet=SHEET_URL, ttl=0)
-        if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
-        # 날짜 등 포맷 통일
+        # 데이터가 없거나 헤더가 안 맞으면 빈 프레임 리턴
+        if df.empty or '날짜' not in df.columns: 
+            return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
+        
         df['날짜'] = df['날짜'].astype(str)
         return df
     except:
@@ -79,17 +81,21 @@ def add_ledger_entry(entry):
         return False
     try:
         df = get_ledger_data()
-        # 입력된 데이터를 DataFrame으로 변환 (타입 강제)
+        # 데이터프레임 변환 (타입 강제)
         new_row = pd.DataFrame([entry])
         
-        if df.empty: updated_df = new_row
-        else: updated_df = pd.concat([df, new_row], ignore_index=True)
+        # 기존 데이터와 병합
+        if df.empty:
+            updated_df = new_row
+        else:
+            updated_df = pd.concat([df, new_row], ignore_index=True)
         
+        # 구글 시트에 쓰기
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
-        st.cache_data.clear() # 캐시 초기화
+        st.cache_data.clear() # 캐시 삭제
         return True
     except Exception as e:
-        st.error(f"저장 실패: {e}")
+        st.error(f"❌ 저장 실패 원인: {e}")
         return False
 
 def update_ledger_data(updated_df):
@@ -315,19 +321,17 @@ with tab1:
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    # [핵심] 원터치 자동 저장 버튼
-                    if st.button("📓 이 조합을 가계부에 바로 저장 (Click)", key="one_touch_save"):
-                        with st.spinner("구글 시트에 기록 중..."):
-                            entry = {
-                                '날짜': datetime.now().strftime("%Y-%m-%d"),
-                                '내용': f"{results[0]['pick']} + {results[1]['pick']}",
-                                '금액': int(final_money),  # Python int형 강제
-                                '배당': float(f"{total_odds:.2f}"), # Python float형 강제
-                                '결과': '대기중',
-                                '손익': 0
-                            }
-                            if add_ledger_entry(entry):
-                                st.success("✅ 저장 완료! '가계부' 탭을 눌러 확인하세요.")
+                    if st.button("📓 이 조합을 장부에 담기 (클릭)", key="auto_save"):
+                        entry = {
+                            '날짜': datetime.now().strftime("%Y-%m-%d"),
+                            '내용': f"{results[0]['pick']} + {results[1]['pick']}",
+                            '금액': int(final_money),
+                            '배당': float(f"{total_odds:.2f}"),
+                            '결과': '대기중',
+                            '손익': 0
+                        }
+                        if add_ledger_entry(entry):
+                            st.success("✅ 장부에 저장했습니다! [가계부] 탭을 확인하세요.")
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
@@ -363,7 +367,6 @@ with tab2:
 
         st.markdown("---")
         st.subheader("📋 상세 내역 (더블클릭하여 수정)")
-        st.caption("결과를 '적중'이나 '미적중'으로 바꾸고 저장을 누르면 손익이 자동 계산됩니다.")
         
         edited_df = st.data_editor(
             df,
@@ -382,7 +385,6 @@ with tab2:
         if st.button("💾 변경사항 저장 (수정/삭제 반영)"):
             edited_df['날짜'] = edited_df['날짜'].dt.strftime("%Y-%m-%d")
             
-            # [중요] 손익 자동 재계산 로직
             def recalc_profit(row):
                 try:
                     amt = float(str(row['금액']).replace(',', ''))
