@@ -11,24 +11,21 @@ import requests
 # ==========================================
 try:
     MY_PASSWORD = st.secrets["password"]
-    # 키가 하나든 여러 개든 리스트로 변환해서 처리
+    # 키 리스트 처리
     keys = st.secrets["odds_api_keys"]
-    if isinstance(keys, str):
-        ODDS_API_KEYS = [keys]
-    else:
-        ODDS_API_KEYS = keys
+    if isinstance(keys, str): ODDS_API_KEYS = [keys]
+    else: ODDS_API_KEYS = keys
 except:
     MY_PASSWORD = "7777"
     ODDS_API_KEYS = []
 
-# [사용자 설정] 배팅 한도
 MIN_BET = 10000   
 MAX_BET = 100000 
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="도현&세준 NBA 프로젝트", page_icon="💸", layout="wide")
 
-# --- 🔐 로그인 화면 ---
+# --- 🔐 로그인 ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -45,121 +42,114 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# 👇 분석기 코드 시작
+# 👇 메인 로직 시작
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 4.2 (Infinity Key)")
+st.title("🏀 NBAI 4.2 (Auto Ledger)")
 
-tab1, tab2 = st.tabs(["🚀 오늘의 분석 (AI)", "📓 내 가계부 (My Ledger)"])
+tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📊 내 가계부 (자동/수동)"])
 
 # -----------------------------------------------------------
-# [기능 1] 키 자동 교체 함수 (핵심 엔진)
+# [기능] 키 자동 교체 (The Odds API)
 # -----------------------------------------------------------
 def fetch_odds_with_rotation():
-    # 등록된 키들을 순서대로 돌아가며 시도
-    for i, key in enumerate(ODDS_API_KEYS):
+    if not ODDS_API_KEYS: return None
+    for key in ODDS_API_KEYS:
         try:
             url = f'https://api.the-odds-api.com/v4/sports/basketball_nba/odds/?regions=eu&markets=h2h,totals&apiKey={key}'
-            response = requests.get(url)
-            
-            # 성공(200)하면 데이터 반환
-            if response.status_code == 200:
-                return response.json()
-            
-            # 실패(401, 429 등)하면 다음 키로 넘어감
-            # (로그는 안 찍고 조용히 넘어갑니다)
-            continue
-            
+            res = requests.get(url)
+            if res.status_code == 200: return res.json()
+        except: continue
+    return None
+
+# -----------------------------------------------------------
+# [기능] NBA 데이터 로딩
+# -----------------------------------------------------------
+@st.cache_data(ttl=3600)
+def load_nba_stats():
+    try:
+        try:
+            standings = leaguestandings.LeagueStandings(season='2025-26')
+            df = standings.get_data_frames()[0]
         except:
-            continue
-            
-    return None # 모든 키가 다 막혔을 때
+            standings = leaguestandings.LeagueStandings(season='2024-25')
+            df = standings.get_data_frames()[0]
+
+        if 'PointsPG' not in df.columns: df['PointsPG'] = 112.0
+        if 'OppPointsPG' not in df.columns: df['OppPointsPG'] = 112.0
+        df['PointDiff'] = df['PointsPG'] - df['OppPointsPG']
+        
+        def get_pct(record):
+            try:
+                w, l = map(int, record.split('-'))
+                return w / (w + l) if (w + l) > 0 else 0.5
+            except: return 0.5
+
+        df['HomePCT'] = df['HOME'].apply(get_pct)
+        df['RoadPCT'] = df['ROAD'].apply(get_pct)
+        df['L10_PCT'] = df['L10'].apply(get_pct)
+        team_stats = df.set_index('TeamID').to_dict('index')
+
+        logs = []
+        for s in ['2024-25', '2023-24']:
+            try:
+                l = leaguegamelog.LeagueGameLog(season=s).get_data_frames()[0]
+                logs.append(l)
+            except: pass
+        total_log = pd.concat(logs) if logs else pd.DataFrame()
+        
+        return team_stats, total_log
+    except:
+        return None, None
+
+def get_ai_prediction(home_id, away_id, team_stats, total_log):
+    hs = team_stats.get(home_id)
+    as_ = team_stats.get(away_id)
+    if not hs or not as_: return 0.5, 0, 0
+
+    h2h_factor = 0
+    if not total_log.empty and 'TEAM_ID' in total_log.columns:
+        h_games = total_log[total_log['TEAM_ID'] == home_id]['GAME_ID'].unique()
+        a_games = total_log[total_log['TEAM_ID'] == away_id]['GAME_ID'].unique()
+        matchups = list(set(h_games) & set(a_games))
+        if len(matchups) > 0:
+            h_wins = 0
+            for g_id in matchups:
+                row = total_log[(total_log['TEAM_ID'] == home_id) & (total_log['GAME_ID'] == g_id)]
+                if not row.empty and row.iloc[0]['WL'] == 'W': h_wins += 1
+            win_rate = h_wins / len(matchups)
+            if win_rate >= 0.7: h2h_factor = 0.15
+            elif win_rate <= 0.3: h2h_factor = -0.15
+
+    h_power = (hs['HomePCT']*0.4) + (hs['PointDiff']*0.03*0.3) + (hs['L10_PCT']*0.3) + h2h_factor
+    a_power = (as_['RoadPCT']*0.4) + (as_['PointDiff']*0.03*0.3) + (as_['L10_PCT']*0.3)
+    
+    if h_power < 0.05: h_power = 0.05
+    if a_power < 0.05: a_power = 0.05
+    win_prob = h_power / (h_power + a_power)
+    
+    ai_total = (hs['PointsPG'] + as_['OppPointsPG'])/2 + (as_['PointsPG'] + hs['OppPointsPG'])/2
+    if ai_total > 240: ai_total += 3.0
+    elif ai_total < 215: ai_total -= 3.0
+    
+    return win_prob, ai_total, h2h_factor
+
+def calc_money(ev_score, prob_score):
+    if ev_score <= 0: return 0
+    ratio = min(ev_score / 0.20, 1.0)
+    amount = MIN_BET + (MAX_BET - MIN_BET) * ratio
+    if prob_score < 0.60:
+        amount = amount * 0.4
+        if amount < MIN_BET: amount = MIN_BET
+    return round(amount, -3)
 
 # -----------------------------------------------------------
 # [탭 1] 오늘의 분석
 # -----------------------------------------------------------
 with tab1:
-    st.caption("키 자동 교체 시스템 가동 중... (무한 동력)")
+    st.caption("해외 배당 자동 로딩 (새로운 키 적용됨)")
     
-    @st.cache_data(ttl=3600)
-    def load_nba_stats():
-        try:
-            try:
-                standings = leaguestandings.LeagueStandings(season='2025-26')
-                df = standings.get_data_frames()[0]
-            except:
-                standings = leaguestandings.LeagueStandings(season='2024-25')
-                df = standings.get_data_frames()[0]
-
-            if 'PointsPG' not in df.columns: df['PointsPG'] = 112.0
-            if 'OppPointsPG' not in df.columns: df['OppPointsPG'] = 112.0
-            df['PointDiff'] = df['PointsPG'] - df['OppPointsPG']
-            
-            def get_pct(record):
-                try:
-                    w, l = map(int, record.split('-'))
-                    return w / (w + l) if (w + l) > 0 else 0.5
-                except: return 0.5
-
-            df['HomePCT'] = df['HOME'].apply(get_pct)
-            df['RoadPCT'] = df['ROAD'].apply(get_pct)
-            df['L10_PCT'] = df['L10'].apply(get_pct)
-            team_stats = df.set_index('TeamID').to_dict('index')
-
-            logs = []
-            for s in ['2024-25', '2023-24']:
-                try:
-                    l = leaguegamelog.LeagueGameLog(season=s).get_data_frames()[0]
-                    logs.append(l)
-                except: pass
-            total_log = pd.concat(logs) if logs else pd.DataFrame()
-            
-            return team_stats, total_log
-        except:
-            return None, None
-
-    def get_ai_prediction(home_id, away_id, team_stats, total_log):
-        hs = team_stats.get(home_id)
-        as_ = team_stats.get(away_id)
-        if not hs or not as_: return 0.5, 0, 0
-
-        h2h_factor = 0
-        if not total_log.empty and 'TEAM_ID' in total_log.columns:
-            h_games = total_log[total_log['TEAM_ID'] == home_id]['GAME_ID'].unique()
-            a_games = total_log[total_log['TEAM_ID'] == away_id]['GAME_ID'].unique()
-            matchups = list(set(h_games) & set(a_games))
-            if len(matchups) > 0:
-                h_wins = 0
-                for g_id in matchups:
-                    row = total_log[(total_log['TEAM_ID'] == home_id) & (total_log['GAME_ID'] == g_id)]
-                    if not row.empty and row.iloc[0]['WL'] == 'W': h_wins += 1
-                win_rate = h_wins / len(matchups)
-                if win_rate >= 0.7: h2h_factor = 0.15
-                elif win_rate <= 0.3: h2h_factor = -0.15
-
-        h_power = (hs['HomePCT']*0.4) + (hs['PointDiff']*0.03*0.3) + (hs['L10_PCT']*0.3) + h2h_factor
-        a_power = (as_['RoadPCT']*0.4) + (as_['PointDiff']*0.03*0.3) + (as_['L10_PCT']*0.3)
-        
-        if h_power < 0.05: h_power = 0.05
-        if a_power < 0.05: a_power = 0.05
-        win_prob = h_power / (h_power + a_power)
-        
-        ai_total = (hs['PointsPG'] + as_['OppPointsPG'])/2 + (as_['PointsPG'] + hs['OppPointsPG'])/2
-        if ai_total > 240: ai_total += 3.0
-        elif ai_total < 215: ai_total -= 3.0
-        
-        return win_prob, ai_total, h2h_factor
-
-    def calc_money(ev_score, prob_score):
-        if ev_score <= 0: return 0
-        ratio = min(ev_score / 0.20, 1.0)
-        amount = MIN_BET + (MAX_BET - MIN_BET) * ratio
-        if prob_score < 0.60:
-            amount = amount * 0.4
-            if amount < MIN_BET: amount = MIN_BET
-        return round(amount, -3)
-
     @st.cache_data(ttl=3600)
     def load_today_data():
         eng_to_kor = {
@@ -185,9 +175,8 @@ with tab1:
         nba_teams = teams.get_teams()
         team_map = {team['id']: team['full_name'] for team in nba_teams}
 
-        # [핵심] 키 자동 교체 함수 호출
+        # 키 자동 교체 함수 사용
         odds_data = fetch_odds_with_rotation()
-        
         odds_map = {}
         if odds_data:
             for game in odds_data:
@@ -229,7 +218,7 @@ with tab1:
         
         return match_data, today_us.strftime('%Y-%m-%d')
 
-    # 화면 구성
+    # 화면 표시
     st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/index.nhn?category=nba")
     
     with st.expander("🏀 팀별 핵심 선수 명단 (족보)"):
@@ -322,56 +311,79 @@ with tab1:
                 st.warning("추천할 만한 경기가 없습니다.")
 
 # -----------------------------------------------------------
-# [탭 2] 내 가계부 (수동 입력)
+# [탭 2] 내 가계부 (자동/수동 하이브리드)
 # -----------------------------------------------------------
 with tab2:
-    st.header("📓 도현&세준의 도박 가계부")
-    st.caption("API 오류가 있어도 걱정 마세요. 결과를 직접 입력하여 자산을 관리합니다.")
+    st.header("📉 가계부 & 성적표")
+    
+    if 'ledger' not in st.session_state: st.session_state['ledger'] = []
 
-    if 'ledger' not in st.session_state:
-        st.session_state['ledger'] = []
-
-    with st.form("ledger_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        date_input = col1.date_input("날짜", datetime.now())
-        match_input = col2.text_input("내용 (예: 골스승+오버)", "골스 승")
-        
-        col3, col4, col5 = st.columns(3)
-        bet_amount = col3.number_input("배팅 금액", min_value=0, value=30000, step=1000)
-        bet_odds = col4.number_input("배당률", min_value=1.0, value=2.0, step=0.1)
-        result = col5.selectbox("결과", ["대기중", "적중 (Win)", "미적중 (Loss)"])
-        
-        submitted = st.form_submit_button("💾 기록 저장")
-        
-        if submitted:
-            profit = 0
-            if result == "적중 (Win)":
-                profit = (bet_amount * bet_odds) - bet_amount
-            elif result == "미적중 (Loss)":
-                profit = -bet_amount
+    # 1. 자동 업데이트 버튼
+    if st.button("🔄 최근 경기결과 자동 스캔 (어제/엊그제)"):
+        with st.spinner("경기 결과 확인 중..."):
+            team_stats, total_log = load_nba_stats()
+            us_timezone = pytz.timezone("US/Eastern")
             
-            st.session_state['ledger'].append({
-                '날짜': date_input.strftime("%Y-%m-%d"),
-                '내용': match_input,
-                '금액': f"{bet_amount:,}",
-                '배당': bet_odds,
-                '결과': result,
-                '손익': profit
-            })
-            st.success("장부에 기록했습니다!")
+            # 최근 2일 조회
+            for i in range(1, 3):
+                d = datetime.now(us_timezone) - timedelta(days=i)
+                d_str = d.strftime('%m/%d/%Y')
+                
+                try:
+                    board = scoreboardv2.ScoreboardV2(game_date=d_str)
+                    games = board.game_header.get_data_frame()
+                    lines = board.line_score.get_data_frame()
+                    if games.empty: continue
+                    finished = games[games['GAME_STATUS_ID'] == 3] # 종료된 경기
+                    
+                    for _, game in finished.iterrows():
+                        gid = game['GAME_ID']; hid = game['HOME_TEAM_ID']; aid = game['VISITOR_TEAM_ID']
+                        h_pts = lines[(lines['GAME_ID']==gid) & (lines['TEAM_ID']==hid)].iloc[0]['PTS']
+                        a_pts = lines[(lines['GAME_ID']==gid) & (lines['TEAM_ID']==aid)].iloc[0]['PTS']
+                        
+                        # AI 예측
+                        win_prob, _, _ = get_ai_prediction(hid, aid, team_stats, total_log)
+                        ai_pick = "홈승" if win_prob > 0.5 else "원정승"
+                        winner = "홈승" if h_pts > a_pts else "원정승"
+                        
+                        # 가계부에 자동 추가 (중복 방지 로직은 생략, 사용자가 삭제 가능)
+                        nba_teams = teams.get_teams()
+                        t_map = {t['id']: t['full_name'] for t in nba_teams}
+                        match_name = f"{t_map.get(hid)} vs {t_map.get(aid)}"
+                        
+                        # 결과 표시 (저장은 수동으로 유도하거나 여기서 자동 저장 가능)
+                        st.info(f"[{d_str}] {match_name} | AI: {ai_pick} | 결과: {winner} ({'✅적중' if ai_pick==winner else '❌미적중'})")
+                except: pass
+            st.success("스캔 완료! 위 결과를 참고해서 아래에 기록하세요.")
 
+    st.markdown("---")
+
+    # 2. 수동 입력 폼
+    st.subheader("✍️ 기록 입력하기")
+    with st.form("ledger_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        date_in = c1.date_input("날짜", datetime.now())
+        desc_in = c2.text_input("내용 (예: 골스 패배)", "골스 승")
+        c3, c4, c5 = st.columns(3)
+        amt_in = c3.number_input("금액", 0, 1000000, 30000, 1000)
+        odd_in = c4.number_input("배당", 1.0, 10.0, 1.9, 0.1)
+        res_in = c5.selectbox("결과", ["적중", "미적중"])
+        
+        if st.form_submit_button("💾 저장"):
+            profit = (amt_in * odd_in) - amt_in if res_in == "적중" else -amt_in
+            st.session_state['ledger'].append({
+                '날짜': date_in.strftime("%Y-%m-%d"), '내용': desc_in,
+                '금액': f"{amt_in:,}", '결과': res_in, '손익': profit
+            })
+            st.success("저장됨!")
+
+    # 3. 장부 출력
     if st.session_state['ledger']:
-        st.markdown("---")
-        df_ledger = pd.DataFrame(st.session_state['ledger'])
-        
-        total_profit = df_ledger['손익'].sum()
-        color = "green" if total_profit >= 0 else "red"
-        
-        st.markdown(f"### 💰 현재 누적 손익: :{color}[{total_profit:,} 원]")
-        st.table(df_ledger)
-        
-        if st.button("🗑️ 기록 전체 삭제"):
+        df = pd.DataFrame(st.session_state['ledger'])
+        total = df['손익'].sum()
+        color = "green" if total >= 0 else "red"
+        st.markdown(f"### 💰 누적 손익: :{color}[{total:,} 원]")
+        st.table(df)
+        if st.button("초기화"):
             st.session_state['ledger'] = []
             st.rerun()
-    else:
-        st.info("아직 기록된 내역이 없습니다.")
