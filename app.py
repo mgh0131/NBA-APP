@@ -8,25 +8,25 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# 🔒 [비밀번호 & 키 설정] (수정된 부분)
+# 🔒 [비밀번호 & 키 설정] (간소화)
 # ==========================================
+# 에러가 나더라도 일단 진행하도록 수정
 try:
-    # 1. 비밀번호 확인
-    MY_PASSWORD = st.secrets["password"]
+    MY_PASSWORD = st.secrets.get("password", "7777")
+    ODDS_API_KEYS = st.secrets.get("odds_api_keys", [])
+    if isinstance(ODDS_API_KEYS, str): ODDS_API_KEYS = [ODDS_API_KEYS]
     
-    # 2. API 키 확인
-    keys = st.secrets["odds_api_keys"]
-    if isinstance(keys, str): ODDS_API_KEYS = [keys]
-    else: ODDS_API_KEYS = keys
-    
-    # 3. 구글 시트 주소 확인 (여기가 문제였습니다!)
-    # connections > gsheets > spreadsheet 경로를 찾아가도록 수정
-    SHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
-    
-except Exception as e:
-    st.error(f"⚠️ Secrets 설정 오류: {e}")
-    st.write("secrets.toml 파일의 구조가 올바른지 확인해주세요.")
-    st.stop()
+    # 구글 시트 URL 가져오기 (경로 2가지 다 체크)
+    SHEET_URL = ""
+    if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        SHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    elif "spreadsheet_url" in st.secrets:
+        SHEET_URL = st.secrets["spreadsheet_url"]
+        
+except:
+    MY_PASSWORD = "7777"
+    ODDS_API_KEYS = []
+    SHEET_URL = ""
 
 MIN_BET = 10000   
 MAX_BET = 100000 
@@ -40,7 +40,6 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state["authenticated"]:
     st.title("🔒 접속 제한구역")
-    st.write("관계자 외 출입금지")
     password_input = st.text_input("비밀번호 입력:", type="password")
     if st.button("로그인"):
         if password_input == MY_PASSWORD:
@@ -55,32 +54,33 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 5.1 (Final Fix)")
+st.title("🏀 NBAI 5.2 (Final Connect)")
 
-tab1, tab2 = st.tabs(["🚀 오늘의 분석", "☁️ 클라우드 가계부 (PC↔폰 연동)"])
+tab1, tab2 = st.tabs(["🚀 오늘의 분석", "☁️ 클라우드 가계부"])
 
 # -----------------------------------------------------------
-# [기능] 구글 시트 연결
+# [기능] 구글 시트 연결 (안전장치 추가)
 # -----------------------------------------------------------
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_ledger_data():
+    if not SHEET_URL: return pd.DataFrame()
     try:
         df = conn.read(spreadsheet=SHEET_URL)
-        # 빈 데이터프레임 처리
         if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         return df
     except:
         return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
 
 def add_ledger_entry(entry):
+    if not SHEET_URL:
+        st.error("구글 시트 주소가 설정되지 않았습니다.")
+        return False
     try:
         df = get_ledger_data()
         new_row = pd.DataFrame([entry])
-        # 빈 데이터프레임일 경우 바로 생성, 아니면 합치기
         if df.empty: updated_df = new_row
         else: updated_df = pd.concat([df, new_row], ignore_index=True)
-        
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
         return True
     except Exception as e:
@@ -88,6 +88,7 @@ def add_ledger_entry(entry):
         return False
 
 def clear_ledger():
+    if not SHEET_URL: return False
     try:
         empty_df = pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         conn.update(spreadsheet=SHEET_URL, data=empty_df)
@@ -240,7 +241,7 @@ with tab1:
     st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/index.nhn?category=nba")
     
     with st.expander("🏀 팀별 핵심 선수 명단 (족보)"):
-        st.write("덴버:요키치, 미네소타:에드워즈, 오클라호마:SGA, 골스:커리, LAL:르브론/갈매기, 샌안:웸반야마") 
+        st.write("덴버:요키치, 미네소타:에드워즈, 오클라호마:SGA, 골스:커리, LAL:르브론/갈매기, 샌안:웸반야마")
 
     with st.spinner('서버 접속 중...'):
         matches, date_str = load_today_data()
@@ -292,7 +293,14 @@ with tab1:
                     ment = "✅ [안정] 꾸준한 수익 추천" if avg_score >= 70 else "🤔 [도전] 소액 추천"
                     if avg_score >= 80: ment = "🌟 [초강력] 풀매수 추천"
                     
-                    final_money = (results[0]['money'] + results[1]['money']) / 2
+                    # 강제 금액 할당
+                    base_money = 10000; max_money = 30000
+                    if avg_score >= 70: base_money = 40000; max_money = 70000
+                    if avg_score >= 80: base_money = 80000; max_money = 100000
+                    
+                    avg_ev = (results[0]['ev'] + results[1]['ev']) / 2
+                    ev_ratio = min(avg_ev / 0.2, 1.0)
+                    final_money = base_money + (max_money - base_money) * ev_ratio
                     final_money = round(final_money, -3)
                     
                     st.markdown("---")
@@ -336,7 +344,6 @@ with tab2:
     df = get_ledger_data()
     
     if not df.empty:
-        # 손익 계산을 위해 숫자형으로 변환 시도
         try:
             total_profit = df['손익'].astype(int).sum()
             color = "green" if total_profit >= 0 else "red"
