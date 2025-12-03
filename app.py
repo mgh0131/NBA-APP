@@ -8,7 +8,7 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# 🔒 [비밀번호 & 키 설정]
+# 🔒 [설정 로딩]
 # ==========================================
 try:
     MY_PASSWORD = st.secrets.get("password", "7777")
@@ -21,7 +21,6 @@ try:
         SHEET_URL = st.secrets["spreadsheet_url"]
     else:
         SHEET_URL = ""
-        
 except:
     MY_PASSWORD = "7777"
     ODDS_API_KEYS = []
@@ -53,7 +52,7 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 6.0 (Quant Master)")
+st.title("🏀 NBAI 6.1 (Full Package)")
 
 tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"])
 
@@ -286,22 +285,8 @@ with tab1:
                 results.sort(key=lambda x: x['ev'], reverse=True)
                 st.subheader("🏆 NBAI 추천 리포트")
                 for r in results:
-                    col_res, col_btn = st.columns([4, 1])
-                    with col_res:
-                        st.info(f"👉 {r['game']} : **{r['pick']}** (배당 {r['odd']})")
-                    with col_btn:
-                        # [원클릭 자동 저장 버튼]
-                        if st.button("장부에 담기", key=f"save_{r['game']}"):
-                            entry = {
-                                '날짜': datetime.now().strftime("%Y-%m-%d"),
-                                '내용': f"{r['game']} / {r['pick']}",
-                                '금액': int(r['money']),
-                                '배당': r['odd'],
-                                '결과': '대기중',
-                                '손익': 0
-                            }
-                            if add_ledger_entry(entry): st.success("저장됨!")
-
+                    st.info(f"👉 {r['game']} : **{r['pick']}** (배당 {r['odd']})")
+                
                 if len(results) >= 2:
                     avg_score = (results[0]['prob'] + results[1]['prob']) / 2 * 100
                     ment = "✅ [안정] 꾸준한 수익 추천" if avg_score >= 70 else "🤔 [도전] 소액 추천"
@@ -310,8 +295,31 @@ with tab1:
                     final_money = (results[0]['money'] + results[1]['money']) / 2
                     final_money = round(final_money, -3)
                     
+                    # [부활한 기능] 예상 당첨금 계산
+                    total_odds = results[0]['odd'] * results[1]['odd']
+                    expected_win = final_money * total_odds
+                    
                     st.markdown("---")
-                    st.success(f"💰 **[오늘의 2폴더]**\n\n👉 **{results[0]['pick']}** + **{results[1]['pick']}**\n\n💸 **권장: {int(final_money):,}원**\n\n💡 {ment}")
+                    st.success(f"""
+                    💰 **[오늘의 2폴더 조합]**
+                    👉 **{results[0]['pick']}** + **{results[1]['pick']}**
+                    
+                    💸 **권장 배팅금: {int(final_money):,}원**
+                    💵 **예상 당첨금: {int(expected_win):,}원** (총 배당 {total_odds:.2f}배)
+                    💡 **AI 가이드:** {ment}
+                    """)
+                    
+                    # [부활한 기능] 장부에 자동 담기 버튼
+                    if st.button("📓 이 조합을 장부에 담기 (클릭)"):
+                        entry = {
+                            '날짜': datetime.now().strftime("%Y-%m-%d"),
+                            '내용': f"{results[0]['pick']} + {results[1]['pick']}",
+                            '금액': final_money,
+                            '배당': total_odds,
+                            '결과': '대기중',
+                            '손익': 0
+                        }
+                        if add_ledger_entry(entry): st.success("가계부에 저장했습니다!")
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
@@ -329,7 +337,7 @@ with tab2:
             df['날짜'] = pd.to_datetime(df['날짜'])
             df = df.sort_values('날짜')
             
-            # 1. 핵심 지표 (Metrics)
+            # 핵심 지표
             total_profit = df['손익'].sum()
             win_count = len(df[df['결과'] == '적중'])
             total_count = len(df[df['결과'].isin(['적중', '미적중'])])
@@ -340,7 +348,7 @@ with tab2:
             c2.metric("🎯 적중률", f"{win_rate:.1f}%", f"{win_count}/{total_count} 경기")
             c3.metric("📝 총 기록", f"{len(df)} 건")
             
-            # 2. 수익금 그래프 (누적 합계)
+            # 수익금 그래프
             df['누적수익'] = df['손익'].cumsum()
             st.subheader("💸 내 자산 흐름 (우상향 체크)")
             st.line_chart(df.set_index('날짜')['누적수익'])
@@ -368,23 +376,23 @@ with tab2:
         
         # 저장 버튼 (수정 사항 반영)
         if st.button("💾 변경사항 저장 (수정/삭제 반영)"):
-            # 날짜를 다시 문자열로 변환해서 저장
             edited_df['날짜'] = edited_df['날짜'].dt.strftime("%Y-%m-%d")
             
-            # [중요] 손익 자동 재계산 로직 추가
+            # [중요] 손익 자동 재계산 로직
             def recalc_profit(row):
                 try:
                     amt = float(str(row['금액']).replace(',',''))
                     odd = float(row['배당'])
                     res = row['결과']
+                    # 적중: (금액 x 배당) - 금액
+                    # 미적중: -금액
                     if res == "적중": return int((amt * odd) - amt)
                     elif res == "미적중": return int(-amt)
-                    return 0 # 대기중
+                    return 0
                 except: return 0
             
             edited_df['손익'] = edited_df.apply(recalc_profit, axis=1)
 
-            # 누적수익 컬럼은 저장 안 함 (계산용)
             if '누적수익' in edited_df.columns:
                 edited_df = edited_df.drop(columns=['누적수익'])
                 
