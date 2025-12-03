@@ -52,19 +52,37 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 6.5 (Instant Sync)")
+st.title("🏀 NBAI 6.6 (Auto Switch)")
 
-tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"])
+# [핵심] 스마트 네비게이션 (탭 대신 라디오 버튼 사용)
+# 세션 스테이트를 이용해 페이지를 강제로 제어합니다.
+if 'current_view' not in st.session_state:
+    st.session_state['current_view'] = "🚀 오늘의 분석"
+
+# 상단 메뉴바 (탭처럼 보이게 가로로 배치)
+view = st.radio(
+    "메뉴 선택", 
+    ["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"], 
+    horizontal=True,
+    label_visibility="collapsed",
+    key="navigation_radio",
+    index=0 if st.session_state['current_view'] == "🚀 오늘의 분석" else 1
+)
+
+# 라디오 버튼 선택 시 세션 상태 동기화
+if view != st.session_state['current_view']:
+    st.session_state['current_view'] = view
+    st.rerun()
 
 # -----------------------------------------------------------
-# [기능] 구글 시트 연결 (캐시 끔: ttl=0)
+# [기능] 구글 시트 연결
 # -----------------------------------------------------------
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_ledger_data():
     if not SHEET_URL: return pd.DataFrame()
     try:
-        # [핵심] ttl=0으로 설정하여 항상 최신 데이터 로딩
+        # 캐시 없이 즉시 로딩 (ttl=0)
         df = conn.read(spreadsheet=SHEET_URL, ttl=0)
         if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         df['날짜'] = df['날짜'].astype(str)
@@ -79,16 +97,13 @@ def add_ledger_entry(entry):
     try:
         df = get_ledger_data()
         new_row = pd.DataFrame([entry])
-        
         if df.empty: updated_df = new_row
         else: updated_df = pd.concat([df, new_row], ignore_index=True)
-        
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
-        # [핵심] 저장 후 캐시 날리기 (즉시 반영)
-        st.cache_data.clear() 
+        st.cache_data.clear() # 캐시 날리기
         return True
     except Exception as e:
-        st.error(f"❌ 저장 에러: {e}")
+        st.error(f"저장 실패: {e}")
         return False
 
 def update_ledger_data(updated_df):
@@ -97,7 +112,7 @@ def update_ledger_data(updated_df):
         st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(f"❌ 수정 에러: {e}")
+        st.error(f"수정 실패: {e}")
         return False
 
 # -----------------------------------------------------------
@@ -177,9 +192,9 @@ def calc_money(ev_score, prob_score):
     return round(amount, -3)
 
 # -----------------------------------------------------------
-# [탭 1] 오늘의 분석
+# [화면 1] 오늘의 분석
 # -----------------------------------------------------------
-with tab1:
+if st.session_state['current_view'] == "🚀 오늘의 분석":
     st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리")
     
     @st.cache_data(ttl=3600)
@@ -300,10 +315,8 @@ with tab1:
                     
                     final_money = (results[0]['money'] + results[1]['money']) / 2
                     final_money = round(final_money, -3)
-                    
-                    # [예상 당첨금 표시]
                     total_odds = results[0]['odd'] * results[1]['odd']
-                    expected_return = final_money * total_odds
+                    expected_win = final_money * total_odds
                     
                     st.markdown("---")
                     st.success(f"""
@@ -311,13 +324,13 @@ with tab1:
                     👉 **{results[0]['pick']}** + **{results[1]['pick']}**
                     
                     💸 **권장 배팅금: {int(final_money):,}원**
-                    💵 **예상 당첨금: {int(expected_return):,}원** (총 배당 {total_odds:.2f}배)
+                    💵 **예상 당첨금: {int(expected_win):,}원** (총 배당 {total_odds:.2f}배)
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    # [장부 자동 저장 버튼]
-                    if st.button("📓 이 조합을 장부에 담기 (클릭)", key="auto_save"):
-                        with st.spinner("장부에 쓰는 중..."):
+                    # [핵심] 장부 자동 저장 후 페이지 이동
+                    if st.button("📓 이 조합을 장부에 담고 이동 (클릭)", key="auto_save"):
+                        with st.spinner("장부에 기록하고 이동합니다..."):
                             entry = {
                                 '날짜': datetime.now().strftime("%Y-%m-%d"),
                                 '내용': f"{results[0]['pick']} + {results[1]['pick']}",
@@ -327,17 +340,17 @@ with tab1:
                                 '손익': 0
                             }
                             if add_ledger_entry(entry):
-                                st.success("✅ 장부에 저장했습니다! [가계부] 탭을 확인하세요.")
-                                st.balloons() # 성공 축하 효과
+                                # 저장 성공 시 페이지 강제 전환
+                                st.session_state['current_view'] = "📈 자산 대시보드 (가계부)"
+                                st.rerun()
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
-# [탭 2] 자산 대시보드 (가계부)
+# [화면 2] 자산 대시보드 (가계부)
 # -----------------------------------------------------------
-with tab2:
+elif st.session_state['current_view'] == "📈 자산 대시보드 (가계부)":
     st.header("📈 자산 대시보드")
     
-    # [수정] ttl=0으로 캐시 끄고 최신 데이터 로딩
     df = get_ledger_data()
     
     if not df.empty:
