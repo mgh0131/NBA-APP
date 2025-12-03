@@ -52,33 +52,33 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 6.3 (Final Fix)")
+st.title("🏀 NBAI 6.4 (Real-time Sync)")
 
 tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"])
 
 # -----------------------------------------------------------
-# [기능] 구글 시트 연결 (안전장치 강화)
+# [기능] 구글 시트 연결 (캐시 끔: ttl=0)
 # -----------------------------------------------------------
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_ledger_data():
     if not SHEET_URL: return pd.DataFrame()
     try:
-        df = conn.read(spreadsheet=SHEET_URL)
+        # [핵심 수정] ttl=0 으로 설정하여 캐시를 끄고 항상 최신 데이터를 가져옴
+        df = conn.read(spreadsheet=SHEET_URL, ttl=0)
         if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
-        # 날짜 등 모든 데이터를 문자열로 변환하여 에러 방지
         df['날짜'] = df['날짜'].astype(str)
         return df
-    except:
+    except Exception as e:
+        # 에러 발생 시 빈 데이터프레임 반환 (화면에는 표시 안 함)
         return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
 
 def add_ledger_entry(entry):
     if not SHEET_URL:
-        st.error("구글 시트 주소가 없습니다.")
+        st.error("구글 시트 주소 오류")
         return False
     try:
         df = get_ledger_data()
-        # [중요] 엔트리 데이터를 데이터프레임으로 만들 때 타입 강제
         new_row = pd.DataFrame([entry])
         
         if df.empty: updated_df = new_row
@@ -87,7 +87,7 @@ def add_ledger_entry(entry):
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
         return True
     except Exception as e:
-        st.error(f"저장 실패 (상세): {e}")
+        st.error(f"❌ 저장 에러: {e}") # 에러 메시지 직접 출력
         return False
 
 def update_ledger_data(updated_df):
@@ -95,7 +95,7 @@ def update_ledger_data(updated_df):
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
         return True
     except Exception as e:
-        st.error(f"수정 실패: {e}")
+        st.error(f"❌ 수정 에러: {e}")
         return False
 
 # -----------------------------------------------------------
@@ -298,6 +298,8 @@ with tab1:
                     
                     final_money = (results[0]['money'] + results[1]['money']) / 2
                     final_money = round(final_money, -3)
+                    
+                    # [예상 당첨금 표시]
                     total_odds = results[0]['odd'] * results[1]['odd']
                     expected_return = final_money * total_odds
                     
@@ -311,14 +313,14 @@ with tab1:
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    # [핵심] 장부 자동 저장 버튼
+                    # [장부 자동 저장 버튼]
                     if st.button("📓 이 조합을 장부에 담기 (클릭)", key="auto_save"):
                         with st.spinner("장부에 쓰는 중..."):
                             entry = {
                                 '날짜': datetime.now().strftime("%Y-%m-%d"),
                                 '내용': f"{results[0]['pick']} + {results[1]['pick']}",
-                                '금액': int(final_money),  # Python int형으로 변환 (중요)
-                                '배당': float(f"{total_odds:.2f}"), # Python float형으로 변환
+                                '금액': int(final_money),
+                                '배당': float(f"{total_odds:.2f}"),
                                 '결과': '대기중',
                                 '손익': 0
                             }
@@ -332,6 +334,7 @@ with tab1:
 with tab2:
     st.header("📈 자산 대시보드")
     
+    # [수정] ttl=0으로 캐시 끄고 최신 데이터 로딩
     df = get_ledger_data()
     
     if not df.empty:
