@@ -52,12 +52,12 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 6.2 (Button Fixed)")
+st.title("🏀 NBAI 6.3 (Final Fix)")
 
 tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"])
 
 # -----------------------------------------------------------
-# [기능] 구글 시트 연결
+# [기능] 구글 시트 연결 (안전장치 강화)
 # -----------------------------------------------------------
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -66,6 +66,7 @@ def get_ledger_data():
     try:
         df = conn.read(spreadsheet=SHEET_URL)
         if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
+        # 날짜 등 모든 데이터를 문자열로 변환하여 에러 방지
         df['날짜'] = df['날짜'].astype(str)
         return df
     except:
@@ -73,17 +74,20 @@ def get_ledger_data():
 
 def add_ledger_entry(entry):
     if not SHEET_URL:
-        st.error("구글 시트 주소 오류")
+        st.error("구글 시트 주소가 없습니다.")
         return False
     try:
         df = get_ledger_data()
+        # [중요] 엔트리 데이터를 데이터프레임으로 만들 때 타입 강제
         new_row = pd.DataFrame([entry])
+        
         if df.empty: updated_df = new_row
         else: updated_df = pd.concat([df, new_row], ignore_index=True)
+        
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
         return True
     except Exception as e:
-        st.error(f"저장 실패: {e}")
+        st.error(f"저장 실패 (상세): {e}")
         return False
 
 def update_ledger_data(updated_df):
@@ -294,8 +298,6 @@ with tab1:
                     
                     final_money = (results[0]['money'] + results[1]['money']) / 2
                     final_money = round(final_money, -3)
-                    
-                    # 예상 당첨금 계산
                     total_odds = results[0]['odd'] * results[1]['odd']
                     expected_return = final_money * total_odds
                     
@@ -309,18 +311,19 @@ with tab1:
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    # [버튼 수정] 자동 저장 버튼 (이제 진짜 작동함)
+                    # [핵심] 장부 자동 저장 버튼
                     if st.button("📓 이 조합을 장부에 담기 (클릭)", key="auto_save"):
-                        entry = {
-                            '날짜': datetime.now().strftime("%Y-%m-%d"),
-                            '내용': f"{results[0]['pick']} + {results[1]['pick']}",
-                            '금액': int(final_money),
-                            '배당': float(f"{total_odds:.2f}"), # 소수점 2자리까지만
-                            '결과': '대기중',
-                            '손익': 0
-                        }
-                        if add_ledger_entry(entry):
-                            st.success("장부에 저장했습니다! [가계부] 탭을 확인하세요.")
+                        with st.spinner("장부에 쓰는 중..."):
+                            entry = {
+                                '날짜': datetime.now().strftime("%Y-%m-%d"),
+                                '내용': f"{results[0]['pick']} + {results[1]['pick']}",
+                                '금액': int(final_money),  # Python int형으로 변환 (중요)
+                                '배당': float(f"{total_odds:.2f}"), # Python float형으로 변환
+                                '결과': '대기중',
+                                '손익': 0
+                            }
+                            if add_ledger_entry(entry):
+                                st.success("✅ 장부에 저장했습니다! [가계부] 탭을 확인하세요.")
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
@@ -356,7 +359,6 @@ with tab2:
 
         st.markdown("---")
         st.subheader("📋 상세 내역 (더블클릭하여 수정)")
-        st.caption("결과를 '적중'이나 '미적중'으로 바꾸고 저장을 누르면 손익이 자동 계산됩니다.")
         
         edited_df = st.data_editor(
             df,
@@ -375,10 +377,8 @@ with tab2:
         if st.button("💾 변경사항 저장 (수정/삭제 반영)"):
             edited_df['날짜'] = edited_df['날짜'].dt.strftime("%Y-%m-%d")
             
-            # [중요] 손익 자동 재계산 로직
             def recalc_profit(row):
                 try:
-                    # 금액에 콤마가 있으면 제거하고 숫자로 변환
                     amt = float(str(row['금액']).replace(',', ''))
                     odd = float(row['배당'])
                     res = row['결과']
