@@ -8,18 +8,24 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# 🔒 [비밀번호 & 키 설정]
+# 🔒 [비밀번호 & 키 설정] (수정된 부분)
 # ==========================================
 try:
+    # 1. 비밀번호 확인
     MY_PASSWORD = st.secrets["password"]
-    # 키 리스트 처리
+    
+    # 2. API 키 확인
     keys = st.secrets["odds_api_keys"]
     if isinstance(keys, str): ODDS_API_KEYS = [keys]
     else: ODDS_API_KEYS = keys
-    # 구글 시트 주소
-    SHEET_URL = st.secrets["spreadsheet_url"]
-except:
-    st.error("⚠️ Secrets 설정이 필요합니다. (password, odds_api_keys, spreadsheet_url)")
+    
+    # 3. 구글 시트 주소 확인 (여기가 문제였습니다!)
+    # connections > gsheets > spreadsheet 경로를 찾아가도록 수정
+    SHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    
+except Exception as e:
+    st.error(f"⚠️ Secrets 설정 오류: {e}")
+    st.write("secrets.toml 파일의 구조가 올바른지 확인해주세요.")
     st.stop()
 
 MIN_BET = 10000   
@@ -34,6 +40,7 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state["authenticated"]:
     st.title("🔒 접속 제한구역")
+    st.write("관계자 외 출입금지")
     password_input = st.text_input("비밀번호 입력:", type="password")
     if st.button("로그인"):
         if password_input == MY_PASSWORD:
@@ -48,33 +55,32 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 5.0 (Cloud Sync)")
+st.title("🏀 NBAI 5.1 (Final Fix)")
 
 tab1, tab2 = st.tabs(["🚀 오늘의 분석", "☁️ 클라우드 가계부 (PC↔폰 연동)"])
 
 # -----------------------------------------------------------
-# [기능] 구글 시트 연결 (핵심)
+# [기능] 구글 시트 연결
 # -----------------------------------------------------------
-# 연결 객체 생성
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_ledger_data():
     try:
-        # 구글 시트 읽기
         df = conn.read(spreadsheet=SHEET_URL)
+        # 빈 데이터프레임 처리
+        if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         return df
     except:
-        # 시트가 비어있거나 에러나면 빈 데이터프레임 반환
         return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
 
 def add_ledger_entry(entry):
     try:
-        # 기존 데이터 불러오기
         df = get_ledger_data()
-        # 새 데이터 추가
         new_row = pd.DataFrame([entry])
-        updated_df = pd.concat([df, new_row], ignore_index=True)
-        # 구글 시트에 업데이트 (쓰기)
+        # 빈 데이터프레임일 경우 바로 생성, 아니면 합치기
+        if df.empty: updated_df = new_row
+        else: updated_df = pd.concat([df, new_row], ignore_index=True)
+        
         conn.update(spreadsheet=SHEET_URL, data=updated_df)
         return True
     except Exception as e:
@@ -89,7 +95,7 @@ def clear_ledger():
     except: return False
 
 # -----------------------------------------------------------
-# [기타 기능] (기존 유지)
+# [기타 기능]
 # -----------------------------------------------------------
 def fetch_odds_with_rotation():
     if not ODDS_API_KEYS: return None
@@ -103,8 +109,6 @@ def fetch_odds_with_rotation():
 
 @st.cache_data(ttl=3600)
 def load_nba_stats():
-    # ... (기존 코드와 동일, 생략 없이 전체 복사 권장) ...
-    # (지면 관계상 핵심만 표시, 실제 적용시엔 이전 버전의 load_nba_stats 함수 전체 사용)
     try:
         try:
             standings = leaguestandings.LeagueStandings(season='2025-26')
@@ -112,11 +116,11 @@ def load_nba_stats():
         except:
             standings = leaguestandings.LeagueStandings(season='2024-25')
             df = standings.get_data_frames()[0]
-        
-        # 간단한 전처리 (기존과 동일)
+
         if 'PointsPG' not in df.columns: df['PointsPG'] = 112.0
         if 'OppPointsPG' not in df.columns: df['OppPointsPG'] = 112.0
         df['PointDiff'] = df['PointsPG'] - df['OppPointsPG']
+        
         def get_pct(record):
             try: return int(record.split('-')[0]) / (int(record.split('-')[0]) + int(record.split('-')[1]))
             except: return 0.5
@@ -124,8 +128,7 @@ def load_nba_stats():
         df['RoadPCT'] = df['ROAD'].apply(get_pct)
         df['L10_PCT'] = df['L10'].apply(get_pct)
         team_stats = df.set_index('TeamID').to_dict('index')
-        
-        # 로그
+
         logs = []
         for s in ['2024-25', '2023-24']:
             try: logs.append(leaguegamelog.LeagueGameLog(season=s).get_data_frames()[0])
@@ -135,7 +138,6 @@ def load_nba_stats():
     except: return None, None
 
 def get_ai_prediction(home_id, away_id, team_stats, total_log):
-    # ... (기존 로직과 동일) ...
     hs = team_stats.get(home_id); as_ = team_stats.get(away_id)
     if not hs or not as_: return 0.5, 0, 0
     h2h_factor = 0
@@ -176,8 +178,6 @@ with tab1:
     
     @st.cache_data(ttl=3600)
     def load_today_data():
-        # ... (기존과 동일한 로직, 간소화 표시) ...
-        # 실제로는 이전 버전의 load_today_data 내용을 그대로 쓰면 됨
         eng_to_kor = {
             'Atlanta Hawks': '애틀랜타', 'Boston Celtics': '보스턴', 'Brooklyn Nets': '브루클린',
             'Charlotte Hornets': '샬럿', 'Chicago Bulls': '시카고', 'Cleveland Cavaliers': '클리블랜드',
@@ -240,7 +240,7 @@ with tab1:
     st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/index.nhn?category=nba")
     
     with st.expander("🏀 팀별 핵심 선수 명단 (족보)"):
-        st.write("덴버:요키치, 미네소타:에드워즈, 오클라호마:SGA, 골스:커리, LAL:르브론/갈매기, 샌안:웸반야마") # 간소화
+        st.write("덴버:요키치, 미네소타:에드워즈, 오클라호마:SGA, 골스:커리, LAL:르브론/갈매기, 샌안:웸반야마") 
 
     with st.spinner('서버 접속 중...'):
         matches, date_str = load_today_data()
@@ -330,7 +330,7 @@ with tab2:
                 }
                 if add_ledger_entry(entry):
                     st.success("저장 완료!")
-                    st.rerun() # 새로고침해서 표 업데이트
+                    st.rerun()
 
     # 2. 데이터 출력
     df = get_ledger_data()
