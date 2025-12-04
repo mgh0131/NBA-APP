@@ -5,10 +5,11 @@ from nba_api.stats.static import teams
 from datetime import datetime, timedelta
 import pytz
 import requests
-from streamlit_gsheets import GSheetsConnection
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ==========================================
-# 🔒 [기본 설정 로딩]
+# 🔒 [설정 로딩]
 # ==========================================
 try:
     MY_PASSWORD = st.secrets.get("password", "7777")
@@ -16,15 +17,19 @@ try:
     if isinstance(ODDS_API_KEYS, str): ODDS_API_KEYS = [ODDS_API_KEYS]
     
     if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-        SHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        SHEET_CONFIG = st.secrets["connections"]["gsheets"]
+        SHEET_URL = SHEET_CONFIG["spreadsheet"]
     elif "spreadsheet_url" in st.secrets:
         SHEET_URL = st.secrets["spreadsheet_url"]
+        SHEET_CONFIG = None
     else:
         SHEET_URL = ""
+        SHEET_CONFIG = None
 except:
     MY_PASSWORD = "7777"
     ODDS_API_KEYS = []
     SHEET_URL = ""
+    SHEET_CONFIG = None
 
 MIN_BET = 10000   
 MAX_BET = 100000 
@@ -32,7 +37,7 @@ MAX_BET = 100000
 # --- 페이지 설정 ---
 st.set_page_config(page_title="도현&세준 NBA 프로젝트", page_icon="💸", layout="wide")
 
-# --- 🔐 로그인 화면 ---
+# --- 🔐 로그인 ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -48,46 +53,49 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# 👇 메인 로직 (스마트 탭 전환)
+# 👇 메인 로직 (탭 대신 커스텀 메뉴 사용)
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 8.4 (Real Action)")
+st.title("🏀 NBAI 9.2 (Direct Switch)")
 
-# [핵심] 탭 상태 관리
-if "active_tab" not in st.session_state:
-    st.session_state["active_tab"] = "🚀 오늘의 분석"
+# [핵심] 화면 상태 관리 (탭 대신 이걸로 제어)
+if "current_page" not in st.session_state:
+    st.session_state["current_page"] = "analysis" # analysis 또는 ledger
 
-# 상단 메뉴 (라디오 버튼)
-tabs = ["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"]
-try:
-    curr_idx = tabs.index(st.session_state["active_tab"])
-except:
-    curr_idx = 0
-
-selected_tab = st.radio(
-    "메뉴 이동", tabs, 
-    index=curr_idx, 
-    horizontal=True, 
-    label_visibility="collapsed"
-)
-
-# 메뉴 직접 클릭 시 이동
-if selected_tab != st.session_state["active_tab"]:
-    st.session_state["active_tab"] = selected_tab
+# 상단 메뉴 버튼 (탭 대신 사용)
+col_m1, col_m2 = st.columns(2)
+if col_m1.button("🚀 오늘의 분석 (홈)", use_container_width=True):
+    st.session_state["current_page"] = "analysis"
+    st.rerun()
+if col_m2.button("📈 자산 대시보드 (가계부)", use_container_width=True):
+    st.session_state["current_page"] = "ledger"
     st.rerun()
 
+st.markdown("---")
+
 # -----------------------------------------------------------
-# [기능 1] 구글 시트 연결 (직통)
+# [기능 1] 구글 시트 연결 (gspread 직통 - 가장 확실함)
 # -----------------------------------------------------------
-conn = st.connection("gsheets", type=GSheetsConnection)
+def get_gsheet_client():
+    if not SHEET_CONFIG: return None
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds_info = dict(SHEET_CONFIG)
+    if "private_key" in creds_info:
+        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client
 
 def get_ledger_data():
     if not SHEET_URL: return pd.DataFrame()
     try:
-        # ttl=0 : 항상 최신 데이터 로딩
-        df = conn.read(spreadsheet=SHEET_URL, ttl=0)
-        if df.empty: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
+        client = get_gsheet_client()
+        sh = client.open_by_url(SHEET_URL)
+        worksheet = sh.sheet1
+        data = worksheet.get_all_records()
+        if not data: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
+        df = pd.DataFrame(data)
         df['날짜'] = df['날짜'].astype(str)
         return df
     except:
@@ -98,30 +106,34 @@ def add_ledger_entry(entry):
         st.error("구글 시트 주소 오류")
         return False
     try:
-        df = get_ledger_data()
-        new_row = pd.DataFrame([entry])
-        
-        if df.empty: updated_df = new_row
-        else: updated_df = pd.concat([df, new_row], ignore_index=True)
-        
-        conn.update(spreadsheet=SHEET_URL, data=updated_df)
-        st.cache_data.clear() # 캐시 삭제
+        client = get_gsheet_client()
+        sh = client.open_by_url(SHEET_URL)
+        worksheet = sh.sheet1
+        # 헤더가 없으면 추가
+        if not worksheet.get_all_values():
+            worksheet.append_row(['날짜', '내용', '금액', '배당', '결과', '손익'])
+        # 데이터 추가
+        worksheet.append_row(list(entry.values()))
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
         return False
 
 def update_ledger_data(updated_df):
+    if not SHEET_URL: return False
     try:
-        conn.update(spreadsheet=SHEET_URL, data=updated_df)
-        st.cache_data.clear()
+        client = get_gsheet_client()
+        sh = client.open_by_url(SHEET_URL)
+        worksheet = sh.sheet1
+        worksheet.clear()
+        worksheet.update([updated_df.columns.values.tolist()] + updated_df.values.tolist())
         return True
     except Exception as e:
         st.error(f"수정 실패: {e}")
         return False
 
 # -----------------------------------------------------------
-# [기능 2] NBA 데이터 및 분석
+# [기능 2] NBA 데이터
 # -----------------------------------------------------------
 def fetch_odds_with_rotation():
     if not ODDS_API_KEYS: return None
@@ -142,11 +154,9 @@ def load_nba_stats():
         except:
             standings = leaguestandings.LeagueStandings(season='2024-25')
             df = standings.get_data_frames()[0]
-
         if 'PointsPG' not in df.columns: df['PointsPG'] = 112.0
         if 'OppPointsPG' not in df.columns: df['OppPointsPG'] = 112.0
         df['PointDiff'] = df['PointsPG'] - df['OppPointsPG']
-        
         def get_pct(record):
             try: return int(record.split('-')[0]) / (int(record.split('-')[0]) + int(record.split('-')[1]))
             except: return 0.5
@@ -154,7 +164,6 @@ def load_nba_stats():
         df['RoadPCT'] = df['ROAD'].apply(get_pct)
         df['L10_PCT'] = df['L10'].apply(get_pct)
         team_stats = df.set_index('TeamID').to_dict('index')
-
         logs = []
         for s in ['2024-25', '2023-24']:
             try: logs.append(leaguegamelog.LeagueGameLog(season=s).get_data_frames()[0])
@@ -197,9 +206,10 @@ def calc_money(ev_score, prob_score):
     return round(amount, -3)
 
 # -----------------------------------------------------------
-# [화면 1] 오늘의 분석
+# [화면 1] 오늘의 분석 (Analysis View)
 # -----------------------------------------------------------
-if st.session_state["active_tab"] == "🚀 오늘의 분석":
+if st.session_state["current_page"] == "analysis":
+    st.header("🚀 오늘의 분석")
     st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리")
     
     @st.cache_data(ttl=3600)
@@ -246,6 +256,7 @@ if st.session_state["active_tab"] == "🚀 오늘의 분석":
         for i, game in games.iterrows():
             hid = game['HOME_TEAM_ID']; aid = game['VISITOR_TEAM_ID']
             h_eng = team_map.get(hid, "Unknown"); a_eng = team_map.get(aid, "Unknown")
+            
             my_odds = {'h_odd':0.0, 'a_odd':0.0, 'ref':0.0}
             for k,v in odds_map.items():
                 if h_eng in k or k in h_eng: my_odds=v; break
@@ -332,9 +343,9 @@ if st.session_state["active_tab"] == "🚀 오늘의 분석":
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    # [버튼 클릭 -> 저장 -> 이동 로직]
-                    if st.button("📓 이 조합을 가계부에 담기 (클릭)", key="auto_save_btn"):
-                        with st.spinner("가계부에 저장하고 이동합니다..."):
+                    # [최종 해결책] 버튼 누르면 저장 후 -> 페이지 강제 전환
+                    if st.button("📓 이 조합을 가계부에 담기 (클릭)", key="final_save"):
+                        with st.spinner("가계부에 기록 중..."):
                             entry = {
                                 '날짜': datetime.now().strftime("%Y-%m-%d"),
                                 '내용': f"{results[0]['pick']} + {results[1]['pick']}",
@@ -344,22 +355,24 @@ if st.session_state["active_tab"] == "🚀 오늘의 분석":
                                 '손익': 0
                             }
                             if add_ledger_entry(entry):
-                                # 저장 성공 시, 탭 상태를 '가계부'로 변경하고 rerun
-                                st.session_state["active_tab"] = "📈 자산 대시보드 (가계부)"
-                                st.rerun()
+                                st.success("저장 완료!")
+                                st.session_state["current_page"] = "ledger" # 페이지 상태 변경
+                                st.rerun() # 즉시 새로고침하여 페이지 이동
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
-# [화면 2] 자산 대시보드 (가계부)
+# [화면 2] 자산 대시보드 (Ledger View)
 # -----------------------------------------------------------
-elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
+elif st.session_state["current_page"] == "ledger":
     st.header("📈 자산 대시보드")
     
     df = get_ledger_data()
     
     if not df.empty:
         try:
+            # 숫자형 변환
             df['손익'] = pd.to_numeric(df['손익'])
+            df['금액'] = pd.to_numeric(df['금액'])
             df['날짜'] = pd.to_datetime(df['날짜'])
             df = df.sort_values('날짜')
             
@@ -393,13 +406,16 @@ elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
                     "결과",
                     options=["대기중", "적중", "미적중"],
                     required=True,
-                )
+                ),
+                 "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
             }
         )
         
         if st.button("💾 변경사항 저장 (수정/삭제 반영)"):
-            edited_df['날짜'] = edited_df['날짜'].dt.strftime("%Y-%m-%d")
+            # 날짜 문자열로 변환
+            edited_df['날짜'] = pd.to_datetime(edited_df['날짜']).dt.strftime("%Y-%m-%d")
             
+            # 손익 재계산
             def recalc_profit(row):
                 try:
                     amt = float(str(row['금액']).replace(',', ''))
@@ -412,6 +428,7 @@ elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
             
             edited_df['손익'] = edited_df.apply(recalc_profit, axis=1)
 
+            # 불필요 컬럼 제거
             if '누적수익' in edited_df.columns:
                 edited_df = edited_df.drop(columns=['누적수익'])
                 
@@ -420,4 +437,4 @@ elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
                 st.rerun()
                 
     else:
-        st.info("장부가 비어있습니다. '오늘의 분석' 탭에서 [장부에 담기]를 눌러보세요!")
+        st.info("장부가 비어있습니다.")
