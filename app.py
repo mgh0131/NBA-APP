@@ -57,32 +57,16 @@ if not st.session_state["authenticated"]:
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 9.3 (One Engine)")
+st.title("🏀 NBAI 10.0 (Reboot)")
 
-# 탭 상태 관리
-if "active_tab" not in st.session_state:
-    st.session_state["active_tab"] = "🚀 오늘의 분석"
-
-# 메뉴 (라디오 버튼)
-tabs = ["🚀 오늘의 분석", "📈 자산 대시보드 (가계부)"]
-try:
-    curr_idx = tabs.index(st.session_state["active_tab"])
-except:
-    curr_idx = 0
-
-selected_tab = st.radio(
-    "메뉴 이동", tabs, 
-    index=curr_idx, 
-    horizontal=True, 
-    label_visibility="collapsed"
-)
-
-if selected_tab != st.session_state["active_tab"]:
-    st.session_state["active_tab"] = selected_tab
-    st.rerun()
+# 데이터 전달을 위한 세션 초기화
+if "fill_date" not in st.session_state: st.session_state["fill_date"] = datetime.now()
+if "fill_desc" not in st.session_state: st.session_state["fill_desc"] = ""
+if "fill_amt" not in st.session_state: st.session_state["fill_amt"] = 30000
+if "fill_odd" not in st.session_state: st.session_state["fill_odd"] = 1.9
 
 # -----------------------------------------------------------
-# [기능 1] 구글 시트 연결 (gspread 단독 사용)
+# [기능 1] 구글 시트 연결 (gspread)
 # -----------------------------------------------------------
 def get_gsheet_client():
     if not SHEET_CONFIG: return None
@@ -104,6 +88,10 @@ def get_ledger_data():
         if not data: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
         df = pd.DataFrame(data)
         df['날짜'] = df['날짜'].astype(str)
+        # 숫자형 변환 (에러 방지)
+        for col in ['금액', '배당', '손익']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         return df
     except:
         return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
@@ -116,12 +104,8 @@ def add_ledger_entry(entry):
         client = get_gsheet_client()
         sh = client.open_by_url(SHEET_URL)
         worksheet = sh.sheet1
-        
-        # 헤더 체크 및 추가
         if not worksheet.get_all_values():
             worksheet.append_row(['날짜', '내용', '금액', '배당', '결과', '손익'])
-            
-        # 데이터 추가
         worksheet.append_row(list(entry.values()))
         st.cache_data.clear()
         return True
@@ -216,10 +200,15 @@ def calc_money(ev_score, prob_score):
     if prob_score < 0.60: amount = max(amount * 0.4, MIN_BET)
     return round(amount, -3)
 
+# ==========================================
+# 👇 탭 구성 (기본 탭으로 복귀)
+# ==========================================
+tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 가계부 (입력/확인)"])
+
 # -----------------------------------------------------------
-# [화면 1] 오늘의 분석
+# [탭 1] 오늘의 분석
 # -----------------------------------------------------------
-if st.session_state["active_tab"] == "🚀 오늘의 분석":
+with tab1:
     st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리")
     
     @st.cache_data(ttl=3600)
@@ -339,7 +328,6 @@ if st.session_state["active_tab"] == "🚀 오늘의 분석":
                     
                     final_money = (results[0]['money'] + results[1]['money']) / 2
                     final_money = round(final_money, -3)
-                    
                     total_odds = results[0]['odd'] * results[1]['odd']
                     expected_return = final_money * total_odds
                     
@@ -353,36 +341,60 @@ if st.session_state["active_tab"] == "🚀 오늘의 분석":
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    if st.button("📓 이 조합을 장부에 담기 (클릭)", key="auto_save_btn"):
-                        with st.spinner("가계부에 저장하고 이동합니다..."):
-                            entry = {
-                                '날짜': datetime.now().strftime("%Y-%m-%d"),
-                                '내용': f"{results[0]['pick']} + {results[1]['pick']}",
-                                '금액': int(final_money),
-                                '배당': float(f"{total_odds:.2f}"),
-                                '결과': '대기중',
-                                '손익': 0
-                            }
-                            if add_ledger_entry(entry):
-                                st.session_state["active_tab"] = "📈 자산 대시보드 (가계부)"
-                                st.rerun()
+                    # [데이터 전달] 버튼 클릭 시 세션에 저장
+                    if st.button("📓 장부에 담기 (클릭)"):
+                        st.session_state["fill_date"] = datetime.now()
+                        st.session_state["fill_desc"] = f"{results[0]['pick']} + {results[1]['pick']}"
+                        st.session_state["fill_amt"] = int(final_money)
+                        st.session_state["fill_odd"] = float(f"{total_odds:.2f}")
+                        st.success("✅ 담았습니다! 상단 [가계부] 탭을 눌러 확인하세요.")
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
-# [화면 2] 자산 대시보드 (가계부)
+# [탭 2] 가계부
 # -----------------------------------------------------------
-elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
+with tab2:
     st.header("📈 자산 대시보드")
     
+    # 1. 입력 폼 (자동 채워짐)
+    with st.expander("➕ 기록 추가/수정", expanded=True):
+        with st.form("ledger_form", clear_on_submit=False): # 초기화 방지
+            c1, c2 = st.columns(2)
+            # 세션에 저장된 값으로 기본값 설정
+            d_val = st.session_state["fill_date"]
+            t_val = st.session_state["fill_desc"]
+            date_in = c1.date_input("날짜", d_val)
+            desc_in = c2.text_input("내용", t_val)
+            
+            c3, c4, c5 = st.columns(3)
+            a_val = st.session_state["fill_amt"]
+            o_val = st.session_state["fill_odd"]
+            amt_in = c3.number_input("금액", 0, 1000000, int(a_val), 1000)
+            odd_in = c4.number_input("배당", 1.0, 50.0, float(o_val), 0.1)
+            res_in = c5.selectbox("결과", ["대기중", "적중", "미적중"])
+            
+            if st.form_submit_button("💾 저장하기"):
+                profit = 0
+                if res_in == "적중": profit = int((amt_in * odd_in) - amt_in)
+                elif res_in == "미적중": profit = int(-amt_in)
+                
+                entry = {
+                    '날짜': date_in.strftime("%Y-%m-%d"),
+                    '내용': desc_in,
+                    '금액': amt_in,
+                    '배당': odd_in,
+                    '결과': res_in,
+                    '손익': profit
+                }
+                if add_ledger_entry(entry):
+                    st.success("저장 완료!")
+                    st.rerun()
+
+    # 2. 데이터 출력
     df = get_ledger_data()
-    
     if not df.empty:
         try:
-            # 숫자형 변환 및 정렬
-            df['손익'] = pd.to_numeric(df['손익'])
-            df['날짜'] = pd.to_datetime(df['날짜'])
-            df = df.sort_values('날짜')
-            
+            # 통계 및 그래프
             total_profit = df['손익'].sum()
             win_count = len(df[df['결과'] == '적중'])
             total_count = len(df[df['결과'].isin(['적중', '미적중'])])
@@ -394,14 +406,12 @@ elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
             c3.metric("📝 총 기록", f"{len(df)} 건")
             
             df['누적수익'] = df['손익'].cumsum()
-            st.subheader("💸 내 자산 흐름")
             st.line_chart(df.set_index('날짜')['누적수익'])
             
-        except Exception as e:
-            st.warning(f"통계 계산 오류: {e}")
+        except: pass
 
         st.markdown("---")
-        st.subheader("📋 상세 내역 (더블클릭하여 수정)")
+        st.subheader("📋 상세 내역 (수정 가능)")
         
         edited_df = st.data_editor(
             df,
@@ -413,15 +423,13 @@ elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
                     "결과",
                     options=["대기중", "적중", "미적중"],
                     required=True,
-                ),
-                 "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
+                )
             }
         )
         
-        if st.button("💾 변경사항 저장 (수정/삭제 반영)"):
-            edited_df['날짜'] = edited_df['날짜'].dt.strftime("%Y-%m-%d")
-            
-            def recalc_profit(row):
+        if st.button("💾 변경사항 저장"):
+            # 손익 재계산 로직
+            def recalc(row):
                 try:
                     amt = float(str(row['금액']).replace(',', ''))
                     odd = float(row['배당'])
@@ -431,42 +439,11 @@ elif st.session_state["active_tab"] == "📈 자산 대시보드 (가계부)":
                     return 0
                 except: return 0
             
-            edited_df['손익'] = edited_df.apply(recalc_profit, axis=1)
-
-            if '누적수익' in edited_df.columns:
-                edited_df = edited_df.drop(columns=['누적수익'])
-                
-            if update_ledger_data(edited_df):
-                st.success("완벽하게 저장되었습니다!")
+            edited_df['손익'] = edited_df.apply(recalc, axis=1)
+            # 불필요 컬럼 제거 후 저장
+            cols_to_save = ['날짜', '내용', '금액', '배당', '결과', '손익']
+            if update_ledger_data(edited_df[cols_to_save]):
+                st.success("수정 완료!")
                 st.rerun()
-                
     else:
-        st.info("장부가 비어있습니다. '오늘의 분석' 탭에서 [장부에 담기]를 눌러보세요!")
-
-    st.markdown("---")
-    st.subheader("✍️ 수동 입력 (직접 기록)")
-    with st.form("cloud_ledger", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        date_in = c1.date_input("날짜", datetime.now())
-        desc_in = c2.text_input("내용", "골스 승")
-        c3, c4, c5 = st.columns(3)
-        amt_in = c3.number_input("금액", 0, 1000000, 30000, 1000)
-        odd_in = c4.number_input("배당", 1.0, 50.0, 1.9, 0.1)
-        res_in = c5.selectbox("결과", ["대기중", "적중", "미적중"])
-        
-        if st.form_submit_button("💾 저장"):
-            profit = 0
-            if res_in == "적중": profit = int((amt_in * odd_in) - amt_in)
-            elif res_in == "미적중": profit = int(-amt_in)
-            
-            entry = {
-                '날짜': date_in.strftime("%Y-%m-%d"),
-                '내용': desc_in,
-                '금액': amt_in,
-                '배당': odd_in,
-                '결과': res_in,
-                '손익': profit
-            }
-            if add_ledger_entry(entry):
-                st.success("저장 완료!")
-                st.rerun()
+        st.info("장부가 비어있습니다.")
