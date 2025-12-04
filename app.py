@@ -5,8 +5,6 @@ from nba_api.stats.static import teams
 from datetime import datetime, timedelta
 import pytz
 import requests
-import gspread
-from google.oauth2.service_account import Credentials
 
 # ==========================================
 # 🔒 [설정 로딩]
@@ -15,27 +13,15 @@ try:
     MY_PASSWORD = st.secrets.get("password", "7777")
     ODDS_API_KEYS = st.secrets.get("odds_api_keys", [])
     if isinstance(ODDS_API_KEYS, str): ODDS_API_KEYS = [ODDS_API_KEYS]
-    
-    if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-        SHEET_CONFIG = st.secrets["connections"]["gsheets"]
-        SHEET_URL = SHEET_CONFIG["spreadsheet"]
-    elif "spreadsheet_url" in st.secrets:
-        SHEET_URL = st.secrets["spreadsheet_url"]
-        SHEET_CONFIG = None
-    else:
-        SHEET_URL = ""
-        SHEET_CONFIG = None
 except:
     MY_PASSWORD = "7777"
     ODDS_API_KEYS = []
-    SHEET_URL = ""
-    SHEET_CONFIG = None
 
 MIN_BET = 10000   
 MAX_BET = 100000 
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="도현&세준 NBA 프로젝트", page_icon="💸", layout="wide")
+st.set_page_config(page_title="도현&세준 NBA 프로젝트", page_icon="🏀", layout="wide")
 
 # --- 🔐 로그인 ---
 if "authenticated" not in st.session_state:
@@ -53,82 +39,15 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# 👇 메인 로직
+# 👇 메인 로직 (분석 전용)
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 10.0 (Reboot)")
-
-# 데이터 전달을 위한 세션 초기화
-if "fill_date" not in st.session_state: st.session_state["fill_date"] = datetime.now()
-if "fill_desc" not in st.session_state: st.session_state["fill_desc"] = ""
-if "fill_amt" not in st.session_state: st.session_state["fill_amt"] = 30000
-if "fill_odd" not in st.session_state: st.session_state["fill_odd"] = 1.9
+st.title("🏀 NBAI Final (Pure Analysis)")
+st.caption("오직 승리를 위한 데이터 분석에만 집중합니다.")
 
 # -----------------------------------------------------------
-# [기능 1] 구글 시트 연결 (gspread)
-# -----------------------------------------------------------
-def get_gsheet_client():
-    if not SHEET_CONFIG: return None
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds_info = dict(SHEET_CONFIG)
-    if "private_key" in creds_info:
-        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
-    client = gspread.authorize(creds)
-    return client
-
-def get_ledger_data():
-    if not SHEET_URL: return pd.DataFrame()
-    try:
-        client = get_gsheet_client()
-        sh = client.open_by_url(SHEET_URL)
-        worksheet = sh.sheet1
-        data = worksheet.get_all_records()
-        if not data: return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
-        df = pd.DataFrame(data)
-        df['날짜'] = df['날짜'].astype(str)
-        # 숫자형 변환 (에러 방지)
-        for col in ['금액', '배당', '손익']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        return df
-    except:
-        return pd.DataFrame(columns=['날짜', '내용', '금액', '배당', '결과', '손익'])
-
-def add_ledger_entry(entry):
-    if not SHEET_URL:
-        st.error("구글 시트 주소 오류")
-        return False
-    try:
-        client = get_gsheet_client()
-        sh = client.open_by_url(SHEET_URL)
-        worksheet = sh.sheet1
-        if not worksheet.get_all_values():
-            worksheet.append_row(['날짜', '내용', '금액', '배당', '결과', '손익'])
-        worksheet.append_row(list(entry.values()))
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"저장 실패: {e}")
-        return False
-
-def update_ledger_data(updated_df):
-    if not SHEET_URL: return False
-    try:
-        client = get_gsheet_client()
-        sh = client.open_by_url(SHEET_URL)
-        worksheet = sh.sheet1
-        worksheet.clear()
-        worksheet.update([updated_df.columns.values.tolist()] + updated_df.astype(str).values.tolist())
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"수정 실패: {e}")
-        return False
-
-# -----------------------------------------------------------
-# [기능 2] NBA 데이터
+# [기능] 키 자동 교체 (The Odds API)
 # -----------------------------------------------------------
 def fetch_odds_with_rotation():
     if not ODDS_API_KEYS: return None
@@ -140,6 +59,9 @@ def fetch_odds_with_rotation():
         except: continue
     return None
 
+# -----------------------------------------------------------
+# [기능] NBA 데이터 로딩 & 분석
+# -----------------------------------------------------------
 @st.cache_data(ttl=3600)
 def load_nba_stats():
     try:
@@ -149,27 +71,41 @@ def load_nba_stats():
         except:
             standings = leaguestandings.LeagueStandings(season='2024-25')
             df = standings.get_data_frames()[0]
+
         if 'PointsPG' not in df.columns: df['PointsPG'] = 112.0
         if 'OppPointsPG' not in df.columns: df['OppPointsPG'] = 112.0
         df['PointDiff'] = df['PointsPG'] - df['OppPointsPG']
+        
         def get_pct(record):
-            try: return int(record.split('-')[0]) / (int(record.split('-')[0]) + int(record.split('-')[1]))
+            try:
+                w, l = map(int, record.split('-'))
+                return w / (w + l) if (w + l) > 0 else 0.5
             except: return 0.5
+
         df['HomePCT'] = df['HOME'].apply(get_pct)
-        df['RoadPCT'] = df['Road'].apply(get_pct)
+        df['RoadPCT'] = df['ROAD'].apply(get_pct)
         df['L10_PCT'] = df['L10'].apply(get_pct)
         team_stats = df.set_index('TeamID').to_dict('index')
+
+        # 상성 분석용 로그 (최근 2년)
         logs = []
         for s in ['2024-25', '2023-24']:
-            try: logs.append(leaguegamelog.LeagueGameLog(season=s).get_data_frames()[0])
+            try:
+                l = leaguegamelog.LeagueGameLog(season=s).get_data_frames()[0]
+                logs.append(l)
             except: pass
         total_log = pd.concat(logs) if logs else pd.DataFrame()
+        
         return team_stats, total_log
-    except: return None, None
+    except:
+        return None, None
 
 def get_ai_prediction(home_id, away_id, team_stats, total_log):
-    hs = team_stats.get(home_id); as_ = team_stats.get(away_id)
+    hs = team_stats.get(home_id)
+    as_ = team_stats.get(away_id)
     if not hs or not as_: return 0.5, 0, 0
+
+    # 천적(상성) 계산
     h2h_factor = 0
     if not total_log.empty and 'TEAM_ID' in total_log.columns:
         h_games = total_log[total_log['TEAM_ID'] == home_id]['GAME_ID'].unique()
@@ -183,267 +119,245 @@ def get_ai_prediction(home_id, away_id, team_stats, total_log):
             win_rate = h_wins / len(matchups)
             if win_rate >= 0.7: h2h_factor = 0.15
             elif win_rate <= 0.3: h2h_factor = -0.15
+
+    # 전력 점수 계산
     h_power = (hs['HomePCT']*0.4) + (hs['PointDiff']*0.03*0.3) + (hs['L10_PCT']*0.3) + h2h_factor
     a_power = (as_['RoadPCT']*0.4) + (as_['PointDiff']*0.03*0.3) + (as_['L10_PCT']*0.3)
+    
     if h_power < 0.05: h_power = 0.05
     if a_power < 0.05: a_power = 0.05
     win_prob = h_power / (h_power + a_power)
+    
+    # 예상 득점
     ai_total = (hs['PointsPG'] + as_['OppPointsPG'])/2 + (as_['PointsPG'] + hs['OppPointsPG'])/2
     if ai_total > 240: ai_total += 3.0
     elif ai_total < 215: ai_total -= 3.0
+    
     return win_prob, ai_total, h2h_factor
 
 def calc_money(ev_score, prob_score):
     if ev_score <= 0: return 0
     ratio = min(ev_score / 0.20, 1.0)
     amount = MIN_BET + (MAX_BET - MIN_BET) * ratio
-    if prob_score < 0.60: amount = max(amount * 0.4, MIN_BET)
+    # 확신도가 낮으면 금액 강제 하향 (안전장치)
+    if prob_score < 0.60:
+        amount = amount * 0.4
+        if amount < MIN_BET: amount = MIN_BET
     return round(amount, -3)
 
-# ==========================================
-# 👇 탭 구성 (기본 탭으로 복귀)
-# ==========================================
-tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📈 가계부 (입력/확인)"])
+# -----------------------------------------------------------
+# [메인 화면 구성]
+# -----------------------------------------------------------
+@st.cache_data(ttl=3600)
+def load_today_data():
+    eng_to_kor = {
+        'Atlanta Hawks': '애틀랜타', 'Boston Celtics': '보스턴', 'Brooklyn Nets': '브루클린',
+        'Charlotte Hornets': '샬럿', 'Chicago Bulls': '시카고', 'Cleveland Cavaliers': '클리블랜드',
+        'Dallas Mavericks': '댈러스', 'Denver Nuggets': '덴버', 'Detroit Pistons': '디트로이트',
+        'Golden State Warriors': '골든스테이트', 'Houston Rockets': '휴스턴', 'Indiana Pacers': '인디애나',
+        'Los Angeles Clippers': 'LA 클리퍼스', 'Los Angeles Lakers': 'LA 레이커스', 'Memphis Grizzlies': '멤피스',
+        'Miami Heat': '마이애미', 'Milwaukee Bucks': '밀워키', 'Minnesota Timberwolves': '미네소타',
+        'New Orleans Pelicans': '뉴올리언스', 'New York Knicks': '뉴욕', 'Oklahoma City Thunder': '오클라호마',
+        'Orlando Magic': '올랜도', 'Philadelphia 76ers': '필라델피아', 'Phoenix Suns': '피닉스',
+        'Portland Trail Blazers': '포틀랜드', 'Sacramento Kings': '새크라멘토', 'San Antonio Spurs': '샌안토니오',
+        'Toronto Raptors': '토론토', 'Utah Jazz': '유타', 'Washington Wizards': '워싱턴'
+    }
 
-# -----------------------------------------------------------
-# [탭 1] 오늘의 분석
-# -----------------------------------------------------------
-with tab1:
-    st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리")
+    team_stats, total_log = load_nba_stats()
+    if not team_stats: return None, "Stats Error"
+
+    us_timezone = pytz.timezone("US/Eastern")
+    today_us = datetime.now(us_timezone)
+    board = scoreboardv2.ScoreboardV2(game_date=today_us.strftime('%m/%d/%Y'))
+    games = board.game_header.get_data_frame()
+    nba_teams = teams.get_teams()
+    team_map = {team['id']: team['full_name'] for team in nba_teams}
+
+    # 배당 API 호출 (키 교체 로직 포함)
+    odds_data = fetch_odds_with_rotation()
+    odds_map = {}
+    if odds_data:
+        for game in odds_data:
+            h_team = game['home_team']
+            h_odd = 0; a_odd = 0; ref = 0
+            for book in game['bookmakers']:
+                for m in book['markets']:
+                    if m['key'] == 'h2h':
+                        for o in m['outcomes']:
+                            if o['name'] == h_team: h_odd = o['price']
+                            else: a_odd = o['price']
+                    if m['key'] == 'totals':
+                        if m['outcomes']: ref = m['outcomes'][0]['point']
+            odds_map[h_team] = {'h_odd': h_odd, 'a_odd': a_odd, 'ref': ref}
+
+    match_data = []
+    for i, game in games.iterrows():
+        home_id = game['HOME_TEAM_ID']
+        away_id = game['VISITOR_TEAM_ID']
+        h_eng = team_map.get(home_id, "Unknown")
+        a_eng = team_map.get(away_id, "Unknown")
+        
+        # 배당 매핑
+        my_odds = {'h_odd': 0.0, 'a_odd': 0.0, 'ref': 0.0}
+        for k, v in odds_map.items():
+            if h_eng in k or k in h_eng: my_odds = v; break
+
+        # AI 분석 실행
+        win_prob, ai_total, h2h_factor = get_ai_prediction(home_id, away_id, team_stats, total_log)
+        
+        h2h_text = "상성 중립"
+        if h2h_factor > 0: h2h_text = "🔥홈팀 천적 우세"
+        elif h2h_factor < 0: h2h_text = "💀홈팀 상성 열세"
+
+        match_data.append({
+            'home': eng_to_kor.get(h_eng, h_eng),
+            'away': eng_to_kor.get(a_eng, a_eng),
+            'prob': win_prob, 'total': ai_total,
+            'odds': my_odds, 'h2h_text': h2h_text
+        })
     
-    @st.cache_data(ttl=3600)
-    def load_today_data():
-        eng_to_kor = {
-            'Atlanta Hawks': '애틀랜타', 'Boston Celtics': '보스턴', 'Brooklyn Nets': '브루클린',
-            'Charlotte Hornets': '샬럿', 'Chicago Bulls': '시카고', 'Cleveland Cavaliers': '클리블랜드',
-            'Dallas Mavericks': '댈러스', 'Denver Nuggets': '덴버', 'Detroit Pistons': '디트로이트',
-            'Golden State Warriors': '골든스테이트', 'Houston Rockets': '휴스턴', 'Indiana Pacers': '인디애나',
-            'Los Angeles Clippers': 'LA 클리퍼스', 'Los Angeles Lakers': 'LA 레이커스', 'Memphis Grizzlies': '멤피스',
-            'Miami Heat': '마이애미', 'Milwaukee Bucks': '밀워키', 'Minnesota Timberwolves': '미네소타',
-            'New Orleans Pelicans': '뉴올리언스', 'New York Knicks': '뉴욕', 'Oklahoma City Thunder': '오클라호마',
-            'Orlando Magic': '올랜도', 'Philadelphia 76ers': '필라델피아', 'Phoenix Suns': '피닉스',
-            'Portland Trail Blazers': '포틀랜드', 'Sacramento Kings': '새크라멘토', 'San Antonio Spurs': '샌안토니오',
-            'Toronto Raptors': '토론토', 'Utah Jazz': '유타', 'Washington Wizards': '워싱턴'
-        }
-        team_stats, total_log = load_nba_stats()
-        if not team_stats: return None, "Stats Error"
-        
-        us_timezone = pytz.timezone("US/Eastern")
-        today_us = datetime.now(us_timezone)
-        board = scoreboardv2.ScoreboardV2(game_date=today_us.strftime('%m/%d/%Y'))
-        games = board.game_header.get_data_frame()
-        nba_teams = teams.get_teams()
-        team_map = {team['id']: team['full_name'] for team in nba_teams}
-        
-        odds_data = fetch_odds_with_rotation()
-        odds_map = {}
-        if odds_data:
-            for game in odds_data:
-                h_team = game['home_team']
-                h_odd=0; a_odd=0; ref=0
-                for book in game['bookmakers']:
-                    for m in book['markets']:
-                        if m['key']=='h2h':
-                            for o in m['outcomes']:
-                                if o['name']==h_team: h_odd=o['price']
-                                else: a_odd=o['price']
-                        if m['key']=='totals':
-                            if m['outcomes']: ref=m['outcomes'][0]['point']
-                odds_map[h_team] = {'h_odd':h_odd, 'a_odd':a_odd, 'ref':ref}
+    return match_data, today_us.strftime('%Y-%m-%d')
 
-        match_data = []
-        for i, game in games.iterrows():
-            hid = game['HOME_TEAM_ID']; aid = game['VISITOR_TEAM_ID']
-            h_eng = team_map.get(hid, "Unknown"); a_eng = team_map.get(aid, "Unknown")
-            my_odds = {'h_odd':0.0, 'a_odd':0.0, 'ref':0.0}
-            for k,v in odds_map.items():
-                if h_eng in k or k in h_eng: my_odds=v; break
-            
-            win_prob, ai_total, h2h_factor = get_ai_prediction(hid, aid, team_stats, total_log)
-            h2h_text = "상성 중립"
-            if h2h_factor > 0: h2h_text = "🔥홈팀 천적 우세"
-            elif h2h_factor < 0: h2h_text = "💀홈팀 상성 열세"
-            
-            match_data.append({
-                'home': eng_to_kor.get(h_eng, h_eng), 'away': eng_to_kor.get(a_eng, a_eng),
-                'prob': win_prob, 'total': ai_total, 'odds': my_odds,
-                'h2h_text': h2h_text, 'h2h_factor': h2h_factor
-            })
-        return match_data, today_us.strftime('%Y-%m-%d')
+# -----------------------
+# 화면 표시
+# -----------------------
+# 1. 부상자 확인 링크 (네이버 직통)
+st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/index.nhn?category=nba")
 
-    st.link_button("🇰🇷 실시간 부상자 확인 (네이버)", "https://m.sports.naver.com/basketball/schedule/index.nhn?category=nba")
+# 2. 핵심 선수 족보
+with st.expander("🏀 팀별 핵심 선수 명단 (족보)"):
+    st.markdown("""
+    | 서부 (West) | 👑 **1옵션 (핵심)** | ⚔️ **2옵션** |
+    | :--- | :--- | :--- |
+    | **덴버** | **요키치 (Jokic)** 🚨 | 머레이 |
+    | **미네소타** | **에드워즈 (Edwards)** | 랜들/고베어 |
+    | **오클라호마** | **S.알렉산더 (SGA)** 🚨 | 홈그렌 |
+    | **골든스테이트** | **커리 (Curry)** 🚨 | 그린 |
+    | **LA 레이커스** | **르브론 (LeBron)** | A.데이비스 |
+    | **피닉스** | **듀란트 (Durant)** | 부커 |
+    | **댈러스** | **돈치치 (Doncic)** 🚨 | 어빙 |
+    | **멤피스** | **모란트 (Morant)** 🚨 | JJJ |
+    | **샌안토니오** | **웸반야마 (Wemby)** 🚨 | 크리스 폴 |
+
+    | 동부 (East) | 👑 **1옵션 (핵심)** | ⚔️ **2옵션** |
+    | :--- | :--- | :--- |
+    | **보스턴** | **테이텀 (Tatum)** 🚨 | 브라운 |
+    | **뉴욕** | **브런슨 (Brunson)** 🚨 | 타운스 |
+    | **필라델피아** | **엠비드 (Embiid)** 🚨 | 조지/맥시 |
+    | **밀워키** | **아데토쿤보 (Giannis)** 🚨 | 릴라드 |
+    | **클리블랜드** | **미첼 (Mitchell)** | 갈란드 |
+    | **인디애나** | **할리버튼 (Hali)** 🚨 | 시아캄 |
+    | **애틀랜타** | **트레이 영 (Young)** | J.존슨 |
+    | **마이애미** | **버틀러 (Butler)** | 아데바요 |
+    """)
+
+st.markdown("---")
+
+with st.spinner('NBAI가 서버에 접속하여 전력을 분석 중입니다...'):
+    matches, date_str = load_today_data()
+
+if matches is None:
+    st.error("데이터 로딩 실패: 잠시 후 다시 시도하거나 수동 분석을 이용하세요.")
+else:
+    st.success(f"✅ 분석 준비 완료 ({date_str})")
     
-    with st.expander("🏀 팀별 핵심 선수 명단 (족보)"):
-        st.write("덴버:요키치, 미네소타:에드워즈, 오클라호마:SGA, 골스:커리, LAL:르브론/갈매기, 샌안:웸반야마")
-
-    with st.spinner('서버 접속 중...'):
-        matches, date_str = load_today_data()
-
-    if matches is None:
-        st.error("데이터 로딩 실패")
-    else:
-        st.success(f"✅ 분석 준비 완료 ({date_str})")
-        input_data = []
-        for idx, match in enumerate(matches):
-            odds = match['odds']; badge = match['h2h_text'] if "상성" not in match['h2h_text'] else ""
-            with st.expander(f"🏀 {match['home']} vs {match['away']} {badge}", expanded=True):
-                c1, c2, c3 = st.columns(3)
-                h_odd = c1.number_input(f"{match['home']} 승 배당", value=float(odds['h_odd']), step=0.01, key=f"h{idx}")
-                a_odd = c2.number_input(f"{match['away']} 승 배당", value=float(odds['a_odd']), step=0.01, key=f"a{idx}")
-                ref = c3.number_input("기준점", value=float(odds['ref']), step=0.5, key=f"r{idx}")
-                input_data.append({'match': match, 'h_odd': h_odd, 'a_odd': a_odd, 'ref': ref})
-
-        if st.button("🚀 NBAI 최종 분석 (Go)", type="primary"):
-            results = []
-            for item in input_data:
-                m = item['match']; h_odd = item['h_odd']; a_odd = item['a_odd']; ref_score = item['ref']
-                if h_odd == 0: continue
-                win_prob = m['prob']; ai_total = m['total']
-                h_ev = (win_prob*h_odd)-1; a_ev = ((1-win_prob)*a_odd)-1
-                match_name = f"{m['home']} vs {m['away']}"
-                note = f" | {m['h2h_text']}" if "천적" in m['h2h_text'] or "열세" in m['h2h_text'] else ""
+    input_data = []
+    for idx, match in enumerate(matches):
+        odds = match['odds']
+        rival_badge = ""
+        # 상성이 있을 때만 뱃지 표시
+        if "천적" in match['h2h_text'] or "열세" in match['h2h_text']:
+            rival_badge = match['h2h_text']
+            
+        with st.expander(f"🏀 {match['home']} vs {match['away']} {rival_badge}", expanded=True):
+            if rival_badge: st.caption(f"📊 {rival_badge}")
                 
-                if h_ev > a_ev and h_ev > 0:
-                    money = calc_money(h_ev, win_prob)
-                    results.append({'type':'승패', 'game':match_name+note, 'pick':f"{m['home']} 승", 'odd':h_odd, 'ev':h_ev, 'prob':win_prob, 'money':money})
-                elif a_ev > h_ev and a_ev > 0:
-                    money = calc_money(a_ev, 1-win_prob)
-                    results.append({'type':'승패', 'game':match_name+note, 'pick':f"{m['away']} 승", 'odd':a_odd, 'ev':a_ev, 'prob':1-win_prob, 'money':money})
-                
-                if ref_score > 0:
-                    diff = ai_total - ref_score
-                    if diff >= 3: results.append({'type':'언오버', 'game':match_name, 'pick':'오버', 'odd':1.9, 'ev':0.1, 'prob':0.6, 'money':calc_money(0.1, 0.6)})
-                    elif diff <= -3: results.append({'type':'언오버', 'game':match_name, 'pick':'언더', 'odd':1.9, 'ev':0.1, 'prob':0.6, 'money':calc_money(0.1, 0.6)})
+            col1, col2, col3 = st.columns(3)
+            h_odd = col1.number_input("홈 배당", value=float(odds['h_odd']), step=0.01, key=f"h_{idx}")
+            a_odd = col2.number_input("원정 배당", value=float(odds['a_odd']), step=0.01, key=f"a_{idx}")
+            ref = col3.number_input("기준점", value=float(odds['ref']), step=0.5, key=f"r_{idx}")
+            
+            input_data.append({'match': match, 'h_odd': h_odd, 'a_odd': a_odd, 'ref': ref})
 
-            if results:
-                results.sort(key=lambda x: x['ev'], reverse=True)
-                st.subheader("🏆 NBAI 추천 리포트")
-                for r in results:
-                    st.info(f"👉 {r['game']} : **{r['pick']}** (배당 {r['odd']})")
-                
-                if len(results) >= 2:
-                    avg_score = (results[0]['prob'] + results[1]['prob']) / 2 * 100
-                    ment = "✅ [안정] 꾸준한 수익 추천" if avg_score >= 70 else "🤔 [도전] 소액 추천"
-                    if avg_score >= 80: ment = "🌟 [초강력] 풀매수 추천"
-                    
-                    final_money = (results[0]['money'] + results[1]['money']) / 2
-                    final_money = round(final_money, -3)
-                    total_odds = results[0]['odd'] * results[1]['odd']
-                    expected_return = final_money * total_odds
-                    
-                    st.markdown("---")
-                    st.success(f"""
-                    💰 **[오늘의 2폴더 조합]**
-                    👉 **{results[0]['pick']}** + **{results[1]['pick']}**
-                    
-                    💸 **권장 배팅금: {int(final_money):,}원**
-                    💵 **예상 당첨금: {int(expected_return):,}원** (총 배당 {total_odds:.2f}배)
-                    💡 **AI 가이드:** {ment}
-                    """)
-                    
-                    # [데이터 전달] 버튼 클릭 시 세션에 저장
-                    if st.button("📓 장부에 담기 (클릭)"):
-                        st.session_state["fill_date"] = datetime.now()
-                        st.session_state["fill_desc"] = f"{results[0]['pick']} + {results[1]['pick']}"
-                        st.session_state["fill_amt"] = int(final_money)
-                        st.session_state["fill_odd"] = float(f"{total_odds:.2f}")
-                        st.success("✅ 담았습니다! 상단 [가계부] 탭을 눌러 확인하세요.")
-            else: st.warning("추천할 경기가 없습니다.")
-
-# -----------------------------------------------------------
-# [탭 2] 가계부
-# -----------------------------------------------------------
-with tab2:
-    st.header("📈 자산 대시보드")
+    st.markdown("---")
     
-    # 1. 입력 폼 (자동 채워짐)
-    with st.expander("➕ 기록 추가/수정", expanded=True):
-        with st.form("ledger_form", clear_on_submit=False): # 초기화 방지
-            c1, c2 = st.columns(2)
-            # 세션에 저장된 값으로 기본값 설정
-            d_val = st.session_state["fill_date"]
-            t_val = st.session_state["fill_desc"]
-            date_in = c1.date_input("날짜", d_val)
-            desc_in = c2.text_input("내용", t_val)
+    if st.button("🚀 NBAI 최종 분석 (Go)", type="primary"):
+        results = []
+        for item in input_data:
+            m = item['match']; h_odd = item['h_odd']; a_odd = item['a_odd']; ref_score = item['ref']
+            if h_odd == 0 or a_odd == 0: continue
             
-            c3, c4, c5 = st.columns(3)
-            a_val = st.session_state["fill_amt"]
-            o_val = st.session_state["fill_odd"]
-            amt_in = c3.number_input("금액", 0, 1000000, int(a_val), 1000)
-            odd_in = c4.number_input("배당", 1.0, 50.0, float(o_val), 0.1)
-            res_in = c5.selectbox("결과", ["대기중", "적중", "미적중"])
+            win_prob = m['prob']
+            ai_total = m['total']
             
-            if st.form_submit_button("💾 저장하기"):
-                profit = 0
-                if res_in == "적중": profit = int((amt_in * odd_in) - amt_in)
-                elif res_in == "미적중": profit = int(-amt_in)
+            # EV 계산
+            h_ev = (win_prob * h_odd) - 1.0
+            a_ev = ((1 - win_prob) * a_odd) - 1.0
+            
+            match_name = f"{m['home']} vs {m['away']}"
+            note = f" | {m['h2h_text']}" if "천적" in m['h2h_text'] or "열세" in m['h2h_text'] else ""
+            
+            # 승패 추천
+            if h_ev > 0 and h_ev > a_ev:
+                bet_money = calc_money(h_ev, win_prob)
+                results.append({'type':'승패', 'game':match_name+note, 'pick':f"{m['home']} 승", 'prob':win_prob*100, 'ev':h_ev, 'odd':h_odd, 'money':bet_money})
+            elif a_ev > 0 and a_ev > h_ev:
+                bet_money = calc_money(a_ev, 1-win_prob)
+                results.append({'type':'승패', 'game':match_name+note, 'pick':f"{m['away']} 승 (역배/플핸)", 'prob':(1-win_prob)*100, 'ev':a_ev, 'odd':a_odd, 'money':bet_money})
+            
+            # 언오버 추천
+            if ref_score > 0:
+                diff = ai_total - ref_score
+                uo_odd = 1.90
+                if diff >= 3.0:
+                    prob = 60; money = calc_money(0.1, 0.6)
+                    results.append({'type':'언오버', 'game':match_name, 'pick':f"오버 ▲ (기준 {ref_score})", 'prob':prob, 'ev':0.1, 'odd':uo_odd, 'money':money})
+                elif diff <= -3.0:
+                    prob = 60; money = calc_money(0.1, 0.6)
+                    results.append({'type':'언오버', 'game':match_name, 'pick':f"언더 ▼ (기준 {ref_score})", 'prob':prob, 'ev':0.1, 'odd':uo_odd, 'money':money})
+
+        if not results:
+            st.warning("⚠️ 추천할 만한 가치 있는 경기(Value Bet)가 없습니다.")
+        else:
+            results.sort(key=lambda x: x['ev'], reverse=True)
+            st.subheader("🏆 NBAI 최종 추천 리포트")
+            
+            for i, res in enumerate(results):
+                tier = "🌟 강력 추천" if i == 0 else "✅ 추천"
+                if "주의" in res['game']:
+                    st.error(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})")
+                else:
+                    st.info(f"**{tier}**: {res['game']}\n\n👉 **{res['pick']}** (배당 {res['odd']})")
+            
+            if len(results) >= 2:
+                avg_score = (results[0]['prob'] + results[1]['prob']) / 2
                 
-                entry = {
-                    '날짜': date_in.strftime("%Y-%m-%d"),
-                    '내용': desc_in,
-                    '금액': amt_in,
-                    '배당': odd_in,
-                    '결과': res_in,
-                    '손익': profit
-                }
-                if add_ledger_entry(entry):
-                    st.success("저장 완료!")
-                    st.rerun()
+                # 금액 구간 고정
+                if avg_score >= 80:
+                    ment = "🌟 [초강력] 오늘 가장 확실한 조합입니다. 상한가(10만원) 근접 추천!"
+                    base_money = 80000; max_money = 100000
+                elif avg_score >= 70:
+                    ment = "✅ [안정] 꾸준히 수익 내기 좋은 조합입니다."
+                    base_money = 40000; max_money = 70000
+                else:
+                    ment = "🤔 [도전] 소액으로 고배당을 노려볼 만합니다."
+                    base_money = 10000; max_money = 30000
+                
+                avg_ev = (results[0]['ev'] + results[1]['ev']) / 2
+                ev_ratio = min(avg_ev / 0.2, 1.0) 
+                final_money = base_money + (max_money - base_money) * ev_ratio
+                final_money = round(final_money, -3)
+                
+                # 예상 당첨금
+                total_odds = results[0]['odd'] * results[1]['odd']
+                expected_return = final_money * total_odds
 
-    # 2. 데이터 출력
-    df = get_ledger_data()
-    if not df.empty:
-        try:
-            # 통계 및 그래프
-            total_profit = df['손익'].sum()
-            win_count = len(df[df['결과'] == '적중'])
-            total_count = len(df[df['결과'].isin(['적중', '미적중'])])
-            win_rate = (win_count / total_count * 100) if total_count > 0 else 0
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("💰 누적 손익", f"{total_profit:,} 원", delta=f"{total_profit:,} 원")
-            c2.metric("🎯 적중률", f"{win_rate:.1f}%", f"{win_count}/{total_count} 경기")
-            c3.metric("📝 총 기록", f"{len(df)} 건")
-            
-            df['누적수익'] = df['손익'].cumsum()
-            st.line_chart(df.set_index('날짜')['누적수익'])
-            
-        except: pass
-
-        st.markdown("---")
-        st.subheader("📋 상세 내역 (수정 가능)")
-        
-        edited_df = st.data_editor(
-            df,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="ledger_editor",
-            column_config={
-                "결과": st.column_config.SelectboxColumn(
-                    "결과",
-                    options=["대기중", "적중", "미적중"],
-                    required=True,
-                )
-            }
-        )
-        
-        if st.button("💾 변경사항 저장"):
-            # 손익 재계산 로직
-            def recalc(row):
-                try:
-                    amt = float(str(row['금액']).replace(',', ''))
-                    odd = float(row['배당'])
-                    res = row['결과']
-                    if res == "적중": return int((amt * odd) - amt)
-                    elif res == "미적중": return int(-amt)
-                    return 0
-                except: return 0
-            
-            edited_df['손익'] = edited_df.apply(recalc, axis=1)
-            # 불필요 컬럼 제거 후 저장
-            cols_to_save = ['날짜', '내용', '금액', '배당', '결과', '손익']
-            if update_ledger_data(edited_df[cols_to_save]):
-                st.success("수정 완료!")
-                st.rerun()
-    else:
-        st.info("장부가 비어있습니다.")
+                st.markdown("---")
+                st.success(f"""
+                💰 **[오늘의 2폴더 조합]**
+                👉 **{results[0]['pick']}** + **{results[1]['pick']}**
+                
+                💸 **권장 배팅금: {int(final_money):,}원**
+                💵 **예상 당첨금: {int(expected_return):,}원** (총 배당 {total_odds:.2f}배)
+                💡 **AI 가이드:** {ment}
+                """)
