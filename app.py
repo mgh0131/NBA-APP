@@ -53,29 +53,17 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# 👇 메인 로직 (탭 대신 커스텀 메뉴 사용)
+# 👇 메인 로직 (심플 버전)
 # ==========================================
 
 st.markdown("### 💸 도현과 세준의 도박 프로젝트")
-st.title("🏀 NBAI 9.2 (Direct Switch)")
+st.title("🏀 NBAI 10.0 (Simple is Best)")
 
-# [핵심] 화면 상태 관리 (탭 대신 이걸로 제어)
-if "current_page" not in st.session_state:
-    st.session_state["current_page"] = "analysis" # analysis 또는 ledger
-
-# 상단 메뉴 버튼 (탭 대신 사용)
-col_m1, col_m2 = st.columns(2)
-if col_m1.button("🚀 오늘의 분석 (홈)", use_container_width=True):
-    st.session_state["current_page"] = "analysis"
-    st.rerun()
-if col_m2.button("📈 자산 대시보드 (가계부)", use_container_width=True):
-    st.session_state["current_page"] = "ledger"
-    st.rerun()
-
-st.markdown("---")
+# 메뉴 (기본 탭 사용 - 가장 안정적)
+tab1, tab2 = st.tabs(["🚀 오늘의 분석", "📓 내 가계부 (수동)"])
 
 # -----------------------------------------------------------
-# [기능 1] 구글 시트 연결 (gspread 직통 - 가장 확실함)
+# [기능 1] 구글 시트 연결
 # -----------------------------------------------------------
 def get_gsheet_client():
     if not SHEET_CONFIG: return None
@@ -109,11 +97,10 @@ def add_ledger_entry(entry):
         client = get_gsheet_client()
         sh = client.open_by_url(SHEET_URL)
         worksheet = sh.sheet1
-        # 헤더가 없으면 추가
         if not worksheet.get_all_values():
             worksheet.append_row(['날짜', '내용', '금액', '배당', '결과', '손익'])
-        # 데이터 추가
         worksheet.append_row(list(entry.values()))
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -127,6 +114,7 @@ def update_ledger_data(updated_df):
         worksheet = sh.sheet1
         worksheet.clear()
         worksheet.update([updated_df.columns.values.tolist()] + updated_df.values.tolist())
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"수정 실패: {e}")
@@ -161,7 +149,7 @@ def load_nba_stats():
             try: return int(record.split('-')[0]) / (int(record.split('-')[0]) + int(record.split('-')[1]))
             except: return 0.5
         df['HomePCT'] = df['HOME'].apply(get_pct)
-        df['RoadPCT'] = df['ROAD'].apply(get_pct)
+        df['RoadPCT'] = df['Road'].apply(get_pct)
         df['L10_PCT'] = df['L10'].apply(get_pct)
         team_stats = df.set_index('TeamID').to_dict('index')
         logs = []
@@ -206,10 +194,9 @@ def calc_money(ev_score, prob_score):
     return round(amount, -3)
 
 # -----------------------------------------------------------
-# [화면 1] 오늘의 분석 (Analysis View)
+# [탭 1] 오늘의 분석
 # -----------------------------------------------------------
-if st.session_state["current_page"] == "analysis":
-    st.header("🚀 오늘의 분석")
+with tab1:
     st.caption("해외 배당 자동 로딩 + 천적 분석 + 자금 관리")
     
     @st.cache_data(ttl=3600)
@@ -343,36 +330,51 @@ if st.session_state["current_page"] == "analysis":
                     💡 **AI 가이드:** {ment}
                     """)
                     
-                    # [최종 해결책] 버튼 누르면 저장 후 -> 페이지 강제 전환
-                    if st.button("📓 이 조합을 가계부에 담기 (클릭)", key="final_save"):
-                        with st.spinner("가계부에 기록 중..."):
-                            entry = {
-                                '날짜': datetime.now().strftime("%Y-%m-%d"),
-                                '내용': f"{results[0]['pick']} + {results[1]['pick']}",
-                                '금액': int(final_money),
-                                '배당': float(f"{total_odds:.2f}"),
-                                '결과': '대기중',
-                                '손익': 0
-                            }
-                            if add_ledger_entry(entry):
-                                st.success("저장 완료!")
-                                st.session_state["current_page"] = "ledger" # 페이지 상태 변경
-                                st.rerun() # 즉시 새로고침하여 페이지 이동
+                    st.warning("⚠️ [자동 저장 기능 삭제됨] 상단 '가계부' 탭을 눌러 직접 기록해주세요.")
             else: st.warning("추천할 경기가 없습니다.")
 
 # -----------------------------------------------------------
-# [화면 2] 자산 대시보드 (Ledger View)
+# [탭 2] 내 가계부 (수동)
 # -----------------------------------------------------------
-elif st.session_state["current_page"] == "ledger":
-    st.header("📈 자산 대시보드")
-    
+with tab2:
+    st.header("📓 내 가계부 (수동 기록)")
+    st.caption("오류 없는 확실한 기록을 위해 직접 입력해주세요.")
+
+    # 1. 입력 폼
+    with st.form("cloud_ledger", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        date_in = c1.date_input("날짜", datetime.now())
+        desc_in = c2.text_input("내용 (예: 골스 승+오버)", "")
+        
+        c3, c4, c5 = st.columns(3)
+        amt_in = c3.number_input("금액", 0, 1000000, 30000, 1000)
+        odd_in = c4.number_input("배당", 1.0, 50.0, 2.0, 0.1)
+        res_in = c5.selectbox("결과", ["대기중", "적중", "미적중"])
+        
+        if st.form_submit_button("💾 기록 저장"):
+            with st.spinner("저장 중..."):
+                profit = 0
+                if res_in == "적중": profit = int((amt_in * odd_in) - amt_in)
+                elif res_in == "미적중": profit = int(-amt_in)
+                
+                entry = {
+                    '날짜': date_in.strftime("%Y-%m-%d"),
+                    '내용': desc_in,
+                    '금액': amt_in,
+                    '배당': odd_in,
+                    '결과': res_in,
+                    '손익': profit
+                }
+                if add_ledger_entry(entry):
+                    st.success("저장 완료!")
+                    st.rerun()
+
+    # 2. 데이터 출력 및 그래프
     df = get_ledger_data()
     
     if not df.empty:
         try:
-            # 숫자형 변환
             df['손익'] = pd.to_numeric(df['손익'])
-            df['금액'] = pd.to_numeric(df['금액'])
             df['날짜'] = pd.to_datetime(df['날짜'])
             df = df.sort_values('날짜')
             
@@ -406,16 +408,13 @@ elif st.session_state["current_page"] == "ledger":
                     "결과",
                     options=["대기중", "적중", "미적중"],
                     required=True,
-                ),
-                 "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
+                )
             }
         )
         
         if st.button("💾 변경사항 저장 (수정/삭제 반영)"):
-            # 날짜 문자열로 변환
-            edited_df['날짜'] = pd.to_datetime(edited_df['날짜']).dt.strftime("%Y-%m-%d")
+            edited_df['날짜'] = edited_df['날짜'].dt.strftime("%Y-%m-%d")
             
-            # 손익 재계산
             def recalc_profit(row):
                 try:
                     amt = float(str(row['금액']).replace(',', ''))
@@ -428,7 +427,6 @@ elif st.session_state["current_page"] == "ledger":
             
             edited_df['손익'] = edited_df.apply(recalc_profit, axis=1)
 
-            # 불필요 컬럼 제거
             if '누적수익' in edited_df.columns:
                 edited_df = edited_df.drop(columns=['누적수익'])
                 
@@ -437,4 +435,4 @@ elif st.session_state["current_page"] == "ledger":
                 st.rerun()
                 
     else:
-        st.info("장부가 비어있습니다.")
+        st.info("아직 기록된 내역이 없습니다.")
